@@ -33,10 +33,11 @@ typedef char i8;
 #endif
 
 #define GPU_DP_SIZE         48
-#define MAX_DP_CNT          (4 * 1024 * 1024)  // ✅ Increased from 256K to 4M
+#define MAX_DP_CNT          (512 * 1024)    // 512K (was 4M)
+#define MAX_CNT_LIST        (512 * 1024)    // 512K (was 4M)
 #define JMP_MASK            (JMP_CNT - 1)
 #define DPTABLE_MAX_CNT     16
-#define MAX_CNT_LIST        (4 * 1024 * 1024)  // ✅ Also increase host DP buffer
+
 #define DP_FLAG             0x8000
 #define INV_FLAG            0x4000
 #define JMP2_FLAG           0x2000
