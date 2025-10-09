@@ -72,4 +72,6 @@ public:
 	u32 dbg[256];
 
 	int GetStatsSpeed();
+	TKparams& GetKparams() { return Kparams; }
+    const TKparams& GetKparams() const { return Kparams; };
 };

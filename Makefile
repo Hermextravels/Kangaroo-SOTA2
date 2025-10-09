@@ -5,6 +5,9 @@ NVCC := $(CUDA_PATH)/bin/nvcc
 CCFLAGS := -O3 -I$(CUDA_PATH)/include
 # Compile ONLY for Tesla T4 (SM 7.5)
 NVCCFLAGS := -O3 -arch=sm_75
+#NVCCFLAGS := -O3 -arch=sm_80   # for A100
+# or
+#NVCCFLAGS := -O3 -arch=sm_89   # for RTX 4090
 LDFLAGS := -L$(CUDA_PATH)/lib64 -lcudart -pthread
 
 CPU_SRC := RCKangaroo.cpp GpuKang.cpp Ec.cpp utils.cpp

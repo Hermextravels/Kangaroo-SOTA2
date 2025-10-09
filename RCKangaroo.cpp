@@ -20,7 +20,7 @@ bool SaveDPState(RCGpuKang* gpuKang, const char* filename) {
     std::ofstream f(filename, std::ios::binary);
     if (!f) return false;
 
-    TKparams& K = gpuKang->Kparams;
+    TKparams& K = gpuKang->GetKparams();
     u32 dp_count = 0;
     cudaMemcpy(&dp_count, K.DPs_out, sizeof(u32), cudaMemcpyDeviceToHost);
 
@@ -57,7 +57,7 @@ bool LoadDPState(RCGpuKang* gpuKang, const char* filename) {
     std::ifstream f(filename, std::ios::binary);
     if (!f) return false;
 
-    TKparams& K = gpuKang->Kparams;
+    TKparams& K = gpuKang->GetKparams();
     u32 dp_count;
     f.read((char*)&dp_count, sizeof(dp_count));
     if (dp_count > MAX_DP_CNT) return false;
