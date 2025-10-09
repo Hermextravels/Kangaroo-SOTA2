@@ -29,7 +29,7 @@ class RCGpuKang
 private:
 	bool StopFlag;
 	EcPoint PntToSolve;
-	int Range; //in bits
+
 	int DP; //in bits
 	Ec ec;
 
