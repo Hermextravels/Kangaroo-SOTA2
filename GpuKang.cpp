@@ -18,16 +18,13 @@ extern bool gGenMode; //tames generation mode
 
 int RCGpuKang::CalcKangCnt()
 {
-    // Base count from GPU specs
     int base_cnt = mpCnt * (IsOldGpu ? 512 : 256) * (IsOldGpu ? 64 : 24);
-    
-    // Cap based on range to prevent host memory exhaustion
     if (Range <= 70) {
-        return min(base_cnt, 131072);   // 128K for small ranges
+        return std::min(base_cnt, 131072);
     } else if (Range <= 100) {
-        return min(base_cnt, 262144);   // 256K for medium ranges
+        return std::min(base_cnt, 262144);
     } else {
-        return min(base_cnt, 524288);   // 512K max for large ranges
+        return std::min(base_cnt, 524288);
     }
 }
 
