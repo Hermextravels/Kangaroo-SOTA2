@@ -209,7 +209,12 @@ void* kang_thr_proc(void* data)
 }
 #endif
 void AddPointsToList(u32* data, int pnt_cnt, u64 ops_cnt)
+
 {
+	
+    if (pnt_cnt > 0) {
+        printf("✅ Received %d new DPs (total DPs so far: %d)\n", pnt_cnt, PntIndex + pnt_cnt);
+    }
 	csAddPoints.Enter();
 	if (PntIndex + pnt_cnt >= MAX_CNT_LIST)
 	{
