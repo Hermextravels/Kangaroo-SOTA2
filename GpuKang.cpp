@@ -7,7 +7,7 @@
 #include <iostream>
 #include "cuda_runtime.h"
 #include "cuda.h"
-
+#include <algorithm>
 #include "GpuKang.h"
 
 cudaError_t cuSetGpuParams(TKparams Kparams, u64* _jmp2_table);
@@ -18,10 +18,17 @@ extern bool gGenMode; //tames generation mode
 
 int RCGpuKang::CalcKangCnt()
 {
-	Kparams.BlockCnt = mpCnt;
-	Kparams.BlockSize = IsOldGpu ? 512 : 256;
-	Kparams.GroupCnt = IsOldGpu ? 64 : 24;
-	return Kparams.BlockSize* Kparams.GroupCnt* Kparams.BlockCnt;
+    // Base count from GPU specs
+    int base_cnt = mpCnt * (IsOldGpu ? 512 : 256) * (IsOldGpu ? 64 : 24);
+    
+    // Cap based on range to prevent host memory exhaustion
+    if (Range <= 70) {
+        return min(base_cnt, 131072);   // 128K for small ranges
+    } else if (Range <= 100) {
+        return min(base_cnt, 262144);   // 256K for medium ranges
+    } else {
+        return min(base_cnt, 524288);   // 512K max for large ranges
+    }
 }
 
 //executes in main thread

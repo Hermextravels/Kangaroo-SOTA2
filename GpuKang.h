@@ -35,6 +35,7 @@ private:
 
 	u32* DPs_out;
 	TKparams Kparams;
+	int Range; // ← ADD THIS
 
 	EcInt HalfRange;
 	EcPoint PntHalfRange;
