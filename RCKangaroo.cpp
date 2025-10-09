@@ -390,7 +390,7 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 		printf("Unsupported Range value (%d)!\r\n", Range);
 		return false;
 	}
-	if ((DP < 14) || (DP > 60)) 
+	if ((DP < 4) || (DP > 60)) 
 	{
 		printf("Unsupported DP value (%d)!\r\n", DP);
 		return false;
