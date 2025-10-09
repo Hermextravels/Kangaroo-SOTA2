@@ -34,7 +34,7 @@ bool SaveDPState(RCGpuKang* gpuKang, const char* filename) {
     f.write((char*)dp_buffer.data(), dp_bytes);
 
     // Save kangaroo states
-    size_t kang_bytes = K.KangCnt * 12 * sizeof(u64);
+    size_t kang_bytes = K.KangCnt * 6 * sizeof(u64); 
     std::vector<u64> kang_buffer(kang_bytes / sizeof(u64));
     cudaMemcpy(kang_buffer.data(), K.Kangs, kang_bytes, cudaMemcpyDeviceToHost);
     f.write((char*)kang_buffer.data(), kang_bytes);
@@ -70,7 +70,7 @@ bool LoadDPState(RCGpuKang* gpuKang, const char* filename) {
     K.DPs_out[0] = dp_count; // Ensure count is set
 
     // Load kangaroo states
-    size_t kang_bytes = K.KangCnt * 12 * sizeof(u64);
+   	size_t kang_bytes = K.KangCnt * 6 * sizeof(u64); 
     std::vector<u64> kang_buffer(kang_bytes / sizeof(u64));
     f.read((char*)kang_buffer.data(), kang_bytes);
     cudaMemcpy(K.Kangs, kang_buffer.data(), kang_bytes, cudaMemcpyHostToDevice);
