@@ -631,7 +631,7 @@ bool ParseCommandLine(int argc, char* argv[])
 		{
 			int val = atoi(argv[ci]);
 			ci++;
-			if ((val < 14) || (val > 60))
+			if ((val < 4) || (val > 60))
 			{
 				printf("error: invalid value for -dp option\r\n");
 				return false;
