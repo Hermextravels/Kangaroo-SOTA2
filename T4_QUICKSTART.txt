@@ -1,0 +1,65 @@
+================================================================================
+  RCKangaroo - Tesla T4 Quick Start Guide
+================================================================================
+
+STEP 1: BUILD
+-------------
+cd /Users/mac/Desktop/puzzle71/RCKangaroo
+./build_t4.sh
+
+(Or manually: make clean && make -j$(nproc))
+
+STEP 2: TEST (Benchmark Mode)
+------------------------------
+./rckangaroo -dp 16 -range 76
+
+Expected output:
+  BENCH: Speed: ~1800-2000 MKeys/s
+  K factor: ~1.15-1.18
+
+STEP 3: SOLVE PUZZLE 71
+------------------------
+./rckangaroo -dp 15 \
+  -range 71 \
+  -start 400000000000000000 \
+  -pubkey 02a521a07e98f78b03fc1e039bc3a51408cd73119b5eb116e583fe57dc8db07aea
+
+Expected time: ~25 hours on single T4
+
+IMPORTANT SETTINGS FOR T4:
+--------------------------
+✓ Use -dp 15 for puzzle 71 (optimal balance)
+✓ Ensure GPU temperature < 80°C (throttle point)
+✓ Power limit: 70W (default)
+✓ 16GB VRAM available (plenty for puzzle 71)
+
+QUICK TIPS:
+-----------
+1. Monitor GPU: nvidia-smi dmon -s pucvmet
+2. Lower DP = more memory but less overhead
+3. Temperature control is critical for T4
+4. Expected ~1.8 GKeys/s sustained performance
+
+OPTIMIZATIONS APPLIED:
+----------------------
+✓ Compute capability 7.5 (native T4)
+✓ 512 threads per block (optimal)
+✓ 64 point groups (maximizes SM usage)
+✓ Fast math enabled
+✓ Register optimization (255 max)
+✓ 2 blocks per SM for better occupancy
+
+TROUBLESHOOTING:
+----------------
+Problem: Low speed (<1.5 GKeys/s)
+Fix: Check temperature, reduce other GPU load
+
+Problem: Memory error
+Fix: Increase -dp value (try 16 or 17)
+
+Problem: CUDA error
+Fix: Update NVIDIA drivers, check CUDA toolkit
+
+================================================================================
+For detailed information, see: T4_OPTIMIZATION_GUIDE.md
+================================================================================

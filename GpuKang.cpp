@@ -7,7 +7,7 @@
 #include <iostream>
 #include "cuda_runtime.h"
 #include "cuda.h"
-#include <algorithm>
+
 #include "GpuKang.h"
 
 cudaError_t cuSetGpuParams(TKparams Kparams, u64* _jmp2_table);
@@ -18,14 +18,13 @@ extern bool gGenMode; //tames generation mode
 
 int RCGpuKang::CalcKangCnt()
 {
-    int base_cnt = mpCnt * (IsOldGpu ? 512 : 256) * (IsOldGpu ? 64 : 24);
-    if (Range <= 70) {
-        return std::min(base_cnt, 131072);
-    } else if (Range <= 100) {
-        return std::min(base_cnt, 262144);
-    } else {
-        return std::min(base_cnt, 524288);
-    }
+	// T4 has 40 SMs - use all of them for maximum throughput
+	Kparams.BlockCnt = mpCnt;
+	Kparams.BlockSize = IsOldGpu ? 512 : 256;
+	Kparams.GroupCnt = IsOldGpu ? 64 : 24;
+
+	// For T4 (40 SMs): 40 blocks * 512 threads * 64 groups = 1,310,720 kangaroos
+	return Kparams.BlockSize* Kparams.GroupCnt* Kparams.BlockCnt;
 }
 
 //executes in main thread
@@ -445,7 +444,7 @@ void RCGpuKang::Execute()
 	while (!StopFlag)
 	{
 		u64 t1 = GetTickCount64();
-		//cudaMemset(Kparams.DPs_out, 0, 4);
+		cudaMemset(Kparams.DPs_out, 0, 4);
 		cudaMemset(Kparams.DPTable, 0, KangCnt * sizeof(u32));
 		cudaMemset(Kparams.LoopedKangs, 0, 8);
 		CallGpuKernelABC(Kparams);
@@ -465,20 +464,16 @@ void RCGpuKang::Execute()
 		}
 		u64 pnt_cnt = (u64)KangCnt * STEP_CNT;
 
-		if (cnt > 0)  // Only copy if there are DPs
-        {
-            err = cudaMemcpy(DPs_out, Kparams.DPs_out + 4, cnt * GPU_DP_SIZE, cudaMemcpyDeviceToHost);
-            if (err != cudaSuccess)
-            {
-                gTotalErrors++;
-                break;
-            }
-            AddPointsToList(DPs_out, cnt, (u64)KangCnt * STEP_CNT);
-            
-            // ✅ AFTER processing, reset counter on GPU
-            u32 zero = 0;
-            cudaMemcpy(Kparams.DPs_out, &zero, sizeof(u32), cudaMemcpyHostToDevice);
-        }
+		if (cnt)
+		{
+			err = cudaMemcpy(DPs_out, Kparams.DPs_out + 4, cnt * GPU_DP_SIZE, cudaMemcpyDeviceToHost);
+			if (err != cudaSuccess)
+			{
+				gTotalErrors++;
+				break;
+			}
+			AddPointsToList(DPs_out, cnt, (u64)KangCnt * STEP_CNT);
+		}
 
 		//dbg
 		cudaMemcpy(dbg, Kparams.dbg_buf, 1024, cudaMemcpyDeviceToHost);

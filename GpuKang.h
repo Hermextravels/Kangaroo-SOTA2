@@ -29,13 +29,12 @@ class RCGpuKang
 private:
 	bool StopFlag;
 	EcPoint PntToSolve;
-
+	int Range; //in bits
 	int DP; //in bits
 	Ec ec;
 
 	u32* DPs_out;
 	TKparams Kparams;
-	int Range; // ← ADD THIS
 
 	EcInt HalfRange;
 	EcPoint PntHalfRange;
@@ -73,6 +72,4 @@ public:
 	u32 dbg[256];
 
 	int GetStatsSpeed();
-	TKparams& GetKparams() { return Kparams; }
-    const TKparams& GetKparams() const { return Kparams; };
 };

@@ -2,12 +2,9 @@ CC := g++
 CUDA_PATH ?= /usr/local/cuda
 NVCC := $(CUDA_PATH)/bin/nvcc
 
+
 CCFLAGS := -O3 -I$(CUDA_PATH)/include
-# Compile ONLY for Tesla T4 (SM 7.5)
-NVCCFLAGS := -O3 -arch=sm_75
-#NVCCFLAGS := -O3 -arch=sm_80   # for A100
-# or
-#NVCCFLAGS := -O3 -arch=sm_89   # for RTX 4090
+NVCCFLAGS := -O3 -gencode=arch=compute_75,code=sm_75 --use_fast_math -maxrregcount=255
 LDFLAGS := -L$(CUDA_PATH)/lib64 -lcudart -pthread
 
 CPU_SRC := RCKangaroo.cpp GpuKang.cpp Ec.cpp utils.cpp
@@ -30,4 +27,4 @@ $(TARGET): $(CPP_OBJECTS) $(CU_OBJECTS)
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(CPP_OBJECTS) $(CU_OBJECTS) $(TARGET)
+	rm -f $(CPP_OBJECTS) $(CU_OBJECTS)

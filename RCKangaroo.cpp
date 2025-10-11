@@ -13,81 +13,7 @@
 #include "defs.h"
 #include "utils.h"
 #include "GpuKang.h"
-// Add to RCKangaroo.cpp (after includes)
-#include <fstream>
 
-bool SaveDPState(RCGpuKang* gpuKang, const char* filename) {
-    std::ofstream f(filename, std::ios::binary);
-    if (!f) return false;
-
-    TKparams& K = gpuKang->GetKparams();
-    u32 dp_count = 0;
-    cudaMemcpy(&dp_count, K.DPs_out, sizeof(u32), cudaMemcpyDeviceToHost);
-
-    // Save DP count
-    f.write((char*)&dp_count, sizeof(dp_count));
-
-    // Save DPs
-    size_t dp_bytes = (4 + dp_count * GPU_DP_SIZE) * sizeof(u32);
-    std::vector<u32> dp_buffer(dp_bytes / sizeof(u32));
-    cudaMemcpy(dp_buffer.data(), K.DPs_out, dp_bytes, cudaMemcpyDeviceToHost);
-    f.write((char*)dp_buffer.data(), dp_bytes);
-
-    // Save kangaroo states
-    size_t kang_bytes = K.KangCnt * 6 * sizeof(u64); 
-    std::vector<u64> kang_buffer(kang_bytes / sizeof(u64));
-    cudaMemcpy(kang_buffer.data(), K.Kangs, kang_bytes, cudaMemcpyDeviceToHost);
-    f.write((char*)kang_buffer.data(), kang_bytes);
-
-    // Save loop states
-    std::vector<u32> l1s2_buffer(K.KangCnt);
-    cudaMemcpy(l1s2_buffer.data(), K.L1S2, K.KangCnt * sizeof(u32), cudaMemcpyDeviceToHost);
-    f.write((char*)l1s2_buffer.data(), K.KangCnt * sizeof(u32));
-
-    u32 looped_count = 0;
-    cudaMemcpy(&looped_count, K.LoopedKangs, sizeof(u32), cudaMemcpyDeviceToHost);
-    std::vector<u32> looped_buffer(2 + looped_count);
-    cudaMemcpy(looped_buffer.data(), K.LoopedKangs, (2 + looped_count) * sizeof(u32), cudaMemcpyDeviceToHost);
-    f.write((char*)looped_buffer.data(), (2 + looped_count) * sizeof(u32));
-
-    return f.good();
-}
-
-bool LoadDPState(RCGpuKang* gpuKang, const char* filename) {
-    std::ifstream f(filename, std::ios::binary);
-    if (!f) return false;
-
-    TKparams& K = gpuKang->GetKparams();
-    u32 dp_count;
-    f.read((char*)&dp_count, sizeof(dp_count));
-    if (dp_count > MAX_DP_CNT) return false;
-
-    // Load DPs
-    size_t dp_bytes = (4 + dp_count * GPU_DP_SIZE) * sizeof(u32);
-    std::vector<u32> dp_buffer(dp_bytes / sizeof(u32));
-    f.read((char*)dp_buffer.data(), dp_bytes);
-    cudaMemcpy(K.DPs_out, dp_buffer.data(), dp_bytes, cudaMemcpyHostToDevice);
-    K.DPs_out[0] = dp_count; // Ensure count is set
-
-    // Load kangaroo states
-   	size_t kang_bytes = K.KangCnt * 6 * sizeof(u64); 
-    std::vector<u64> kang_buffer(kang_bytes / sizeof(u64));
-    f.read((char*)kang_buffer.data(), kang_bytes);
-    cudaMemcpy(K.Kangs, kang_buffer.data(), kang_bytes, cudaMemcpyHostToDevice);
-
-    // Load loop states
-    std::vector<u32> l1s2_buffer(K.KangCnt);
-    f.read((char*)l1s2_buffer.data(), K.KangCnt * sizeof(u32));
-    cudaMemcpy(K.L1S2, l1s2_buffer.data(), K.KangCnt * sizeof(u32), cudaMemcpyHostToDevice);
-
-    u32 looped_count;
-    f.read((char*)&looped_count, sizeof(looped_count));
-    std::vector<u32> looped_buffer(2 + looped_count);
-    f.read((char*)looped_buffer.data(), (2 + looped_count) * sizeof(u32));
-    cudaMemcpy(K.LoopedKangs, looped_buffer.data(), (2 + looped_count) * sizeof(u32), cudaMemcpyHostToDevice);
-
-    return f.good();
-}
 
 EcJMP EcJumps1[JMP_CNT];
 EcJMP EcJumps2[JMP_CNT];
@@ -209,12 +135,7 @@ void* kang_thr_proc(void* data)
 }
 #endif
 void AddPointsToList(u32* data, int pnt_cnt, u64 ops_cnt)
-
 {
-	
-    if (pnt_cnt > 0) {
-        printf("✅ Received %d new DPs (total DPs so far: %d)\n", pnt_cnt, PntIndex + pnt_cnt);
-    }
 	csAddPoints.Enter();
 	if (PntIndex + pnt_cnt >= MAX_CNT_LIST)
 	{
@@ -395,7 +316,7 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 		printf("Unsupported Range value (%d)!\r\n", Range);
 		return false;
 	}
-	if ((DP < 4) || (DP > 60)) 
+	if ((DP < 14) || (DP > 60)) 
 	{
 		printf("Unsupported DP value (%d)!\r\n", DP);
 		return false;
@@ -523,50 +444,24 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 #endif
 	}
 
-	// >>> BEGIN: DP SAVE/LOAD INTEGRATION <<<
-const char* dp_save_file = "dps_state.dat";
+	u64 tm_stats = GetTickCount64();
+	while (!gSolved)
+	{
+		CheckNewPoints();
+		Sleep(10);
+		if (GetTickCount64() - tm_stats > 10 * 1000)
+		{
+			ShowStats(tm0, ops, dp_val);
+			tm_stats = GetTickCount64();
+		}
 
-bool resumed = false;
-if (!gGenMode && !gIsOpsLimit) {
-    RCGpuKang* firstGpu = GpuKangs[0];
-    if (LoadDPState(firstGpu, dp_save_file)) { // ✅ Pass RCGpuKang*
-        printf("✅ Resumed from %s\n", dp_save_file);
-        resumed = true;
-    } else {
-        printf("🆕 Starting fresh solve\n");
-    }
-}
-
-u64 last_save_time = GetTickCount64();
-const u64 SAVE_INTERVAL_MS = 10 * 60 * 1000;
-
-u64 tm_stats = GetTickCount64();
-while (!gSolved)
-{
-    CheckNewPoints();
-    Sleep(10);
-    u64 now = GetTickCount64();
-
-    if (!gGenMode && (now - last_save_time) >= SAVE_INTERVAL_MS) {
-        RCGpuKang* firstGpu = GpuKangs[0];
-        if (SaveDPState(firstGpu, dp_save_file)) { // ✅ Pass RCGpuKang*
-            printf("💾 Saved DP state to %s\n", dp_save_file);
-        }
-        last_save_time = now;
-    }
-
-    if (now - tm_stats > 10 * 1000) {
-        ShowStats(tm0, ops, dp_val);
-        tm_stats = now;
-    }
-
-    if ((MaxTotalOps > 0.0) && (PntTotalOps > MaxTotalOps)) {
-        gIsOpsLimit = true;
-        printf("Operations limit reached\r\n");
-        break;
-    }
-}
-// >>> END: DP SAVE/LOAD INTEGRATION <<<
+		if ((MaxTotalOps > 0.0) && (PntTotalOps > MaxTotalOps))
+		{
+			gIsOpsLimit = true;
+			printf("Operations limit reached\r\n");
+			break;
+		}
+	}
 
 	printf("Stopping work ...\r\n");
 	for (int i = 0; i < GpuCnt; i++)
@@ -636,7 +531,7 @@ bool ParseCommandLine(int argc, char* argv[])
 		{
 			int val = atoi(argv[ci]);
 			ci++;
-			if ((val < 4) || (val > 60))
+			if ((val < 14) || (val > 60))
 			{
 				printf("error: invalid value for -dp option\r\n");
 				return false;
