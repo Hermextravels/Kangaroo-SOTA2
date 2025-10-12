@@ -57,7 +57,7 @@ __global__ void KernelA(const TKparams Kparams)
     __syncthreads(); 
 
 	__align__(16) u64 x[4], y[4], tmp[4], tmp2[4];
-	u64 dp_mask64 = ~((1ull << (64 - Kparams.DP)) - 1);
+	u64 dp_mask = (Kparams.DP >= 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << Kparams.DP) - 1);
 	u16 jmp_ind;
 
 	//copy kangs from global to L2
@@ -159,7 +159,7 @@ __global__ void KernelA(const TKparams Kparams)
 				jmp_ind |= JMP2_FLAG;
 			}
 			
-			if ((x[3] & dp_mask64) == 0)
+			if ((x[0] & dp_mask) == 0)
 			{
 				u32 kang_ind = (THREAD_X + BLOCK_X * BLOCK_SIZE) * PNT_GROUP_CNT + group;
 				u32 ind = atomicAdd(Kparams.DPTable + kang_ind, 1);
@@ -242,7 +242,7 @@ __global__ void KernelA(const TKparams Kparams)
 
 	__align__(16) u64 inverse[5];
 	__align__(16) u64 x[4], y[4], tmp[4], tmp2[4];
-	u64 dp_mask64 = ~((1ull << (64 - Kparams.DP)) - 1);
+	u64 dp_mask = (Kparams.DP >= 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << Kparams.DP) - 1)
 	u16 jmp_ind;
 
 	//copy kangs from global to local
@@ -397,7 +397,7 @@ __global__ void KernelA(const TKparams Kparams)
 				jmp_ind |= JMP2_FLAG;
 			}
 
-			if ((x[3] & dp_mask64) == 0)
+			if ((x[0] & dp_mask) == 0)
 			{
 				u32 kang_ind = (THREAD_X + BLOCK_X * BLOCK_SIZE) * PNT_GROUP_CNT + group;
 				u32 ind = atomicAdd(Kparams.DPTable + kang_ind, 1);
