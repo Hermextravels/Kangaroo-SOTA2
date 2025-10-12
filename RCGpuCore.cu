@@ -242,7 +242,7 @@ __global__ void KernelA(const TKparams Kparams)
 
 	__align__(16) u64 inverse[5];
 	__align__(16) u64 x[4], y[4], tmp[4], tmp2[4];
-	u64 dp_mask = (Kparams.DP >= 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << Kparams.DP) - 1)
+	u64 dp_mask = (Kparams.DP >= 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << Kparams.DP) - 1);
 	u16 jmp_ind;
 
 	//copy kangs from global to local
