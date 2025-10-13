@@ -1,6 +1,6 @@
 CC := g++
 CUDA_PATH ?= /usr/local/cuda
-NVCC := $(CUDA_PATH)bin/nvcc
+NVCC := $(CUDA_PATH)/bin/nvcc
 
 
 CCFLAGS := -O3 -I$(CUDA_PATH)/include -I.
