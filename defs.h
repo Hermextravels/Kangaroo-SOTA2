@@ -17,13 +17,16 @@ typedef short i16;
 typedef unsigned char u8;
 typedef char i8;
 
+// Forward declaration
+class EcInt;
+
 // Checkpoint structure for resumable operations
 struct CheckpointData {
     u64 totalOps;
     u32 pntIndex;
-    EcInt currentStart;
-    EcInt currentEnd;
     u8 checkpointVersion;
+    u64 currentStartWords[4];  // 256-bit number stored as 4 u64
+    u64 currentEndWords[4];    // 256-bit number stored as 4 u64
 };
 
 

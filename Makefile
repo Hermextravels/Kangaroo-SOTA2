@@ -3,8 +3,8 @@ CUDA_PATH ?= /usr/local/cuda
 NVCC := $(CUDA_PATH)bin/nvcc
 
 
-CCFLAGS := -O3 -I$(CUDA_PATH)/include
-NVCCFLAGS := -O3  -gencode=arch=compute_75,code=compute_75 
+CCFLAGS := -O3 -I$(CUDA_PATH)/include -I.
+NVCCFLAGS := -O3 --use_fast_math -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_86,code=compute_86
 LDFLAGS := -L$(CUDA_PATH)/lib64 -lcudart -pthread
 
 CPU_SRC := RCKangaroo.cpp GpuKang.cpp Ec.cpp utils.cpp

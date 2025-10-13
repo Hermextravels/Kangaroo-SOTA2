@@ -74,7 +74,10 @@ void SaveCheckpoint()
     cp.checkpointVersion = 1;
     cp.totalOps = TotalOps;
     cp.pntIndex = PntIndex;
-    cp.currentStart = gStart;
+    
+    // Store the start range
+    u64* startWords = gStart.GetWords();
+    memcpy(cp.currentStartWords, startWords, sizeof(u64) * 4);
     
     FILE* f = fopen(gCheckpointFile, "wb");
     if (f) {
@@ -102,7 +105,9 @@ bool LoadCheckpoint()
     
     TotalOps = cp.totalOps;
     PntIndex = cp.pntIndex;
-    gStart = cp.currentStart;
+    
+    // Restore the start range
+    gStart.SetWords(cp.currentStartWords);
     
     size_t bytesToRead = PntIndex * sizeof(DBRec);
     if (fread(pPntList, 1, bytesToRead, f) != bytesToRead) {
