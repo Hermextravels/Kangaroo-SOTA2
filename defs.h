@@ -57,6 +57,7 @@ typedef char i8;
 #define TAME				0  // Tame kangs
 #define WILD1				1  // Wild kangs1 
 #define WILD2				2  // Wild kangs2
+#define WILD3               3  // Wild kangs3 (New: Fourth kangaroo type)
 
 #define GPU_DP_SIZE			48
 #define MAX_DP_CNT			(256 * 1024)
@@ -69,7 +70,10 @@ typedef char i8;
 
 #define DP_FLAG				0x8000
 #define INV_FLAG			0x4000
-#define JMP2_FLAG			0x2000
+#define JMP2_FLAG            0x2000
+#define JMP3_FLAG            0x1000 // New
+#define JMP4_FLAG            0x0800 // New
+
 
 #define MD_LEN				10
 

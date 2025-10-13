@@ -18,6 +18,7 @@
 EcJMP EcJumps1[JMP_CNT];
 EcJMP EcJumps2[JMP_CNT];
 EcJMP EcJumps3[JMP_CNT];
+EcJMP EcJumps4[JMP_CNT]; // New: Fourth jump table
 
 RCGpuKang* GpuKangs[MAX_GPU_CNT];
 int GpuCnt;
