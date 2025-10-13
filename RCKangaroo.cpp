@@ -58,11 +58,17 @@ void CheckNewPoints() {
 	for (int i = 0; i < GpuCnt; i++) {
 		u32* dp_out = GpuKangs[i]->GetDPOutput();
 		int dp_cnt = dp_out[0];
-        
+		// pointer to first byte of first DP entry
+		u8* base = (u8*)(dp_out + 1);
+
 		for (int j = 0; j < dp_cnt; j++) {
 			DPRecord nrec;
-			// Copy DP data from GPU output
-			memcpy(&nrec, dp_out + 1 + j * sizeof(DPRecord)/4, sizeof(DPRecord));
+			// Copy the 22-byte distance and type from the GPU buffer using GPU_DP_SIZE stride
+			u8* entry = base + (size_t)j * GPU_DP_SIZE;
+			// d is stored starting at offset 16, length 22
+			memcpy(nrec.d, entry + 16, sizeof(nrec.d));
+			// type is stored at byte offset 40
+			nrec.type = entry[40];
             
 			// Update statistics
 			if (nrec.type < 4) {
@@ -256,9 +262,10 @@ void SaveCheckpoint()
     memcpy(cp.currentStartWords, gStart.GetWords(), sizeof(u64) * 4);
     
     FILE* f = fopen(gCheckpointFile, "wb");
-    if (f) {
-        fwrite(&cp, sizeof(CheckpointData), 1, f);
-        fwrite(pPntList, 1, PntIndex * sizeof(DBRec), f);
+	if (f) {
+		fwrite(&cp, sizeof(CheckpointData), 1, f);
+		// pPntList stores GPU_DP_SIZE bytes per point; write the full buffer
+		fwrite(pPntList, 1, (size_t)PntIndex * GPU_DP_SIZE, f);
         fclose(f);
         printf("\nCheckpoint saved: %llu ops, %u points\n", cp.totalOps, cp.pntIndex);
     }
@@ -291,8 +298,8 @@ bool LoadCheckpoint()
     // Restore the start range
     gStart.SetWords(cp.currentStartWords);
     
-    size_t bytesToRead = PntIndex * sizeof(DBRec);
-    if (fread(pPntList, 1, bytesToRead, f) != bytesToRead) {
+	size_t bytesToRead = (size_t)PntIndex * GPU_DP_SIZE;
+	if (fread(pPntList, 1, bytesToRead, f) != bytesToRead) {
         printf("\nError reading checkpoint data\n");
         fclose(f);
         return false;
@@ -754,6 +761,17 @@ bool ParseCommandLine(int argc, char* argv[])
 		if (strcmp(argument, "-tames") == 0)
 		{
 			strcpy(gTamesFileName, argv[ci]);
+			ci++;
+		}
+		else
+		if (strcmp(argument, "-checkpoint") == 0)
+		{
+			if (ci >= argc) {
+				printf("error: missed value after -checkpoint option\r\n");
+				return false;
+			}
+			strncpy(gCheckpointFile, argv[ci], sizeof(gCheckpointFile) - 1);
+			gCheckpointFile[sizeof(gCheckpointFile) - 1] = '\0';
 			ci++;
 		}
 		else
