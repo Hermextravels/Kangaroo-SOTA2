@@ -7,6 +7,10 @@
 // Shared memory cache for jump tables
 __device__ __shared__ u64 shared_jmp_cache[JMP_BATCH_SIZE * 4];
 
+// Declare jmp2_table_part1 and jmp2_table_part2 as extern device symbols
+extern __device__ __constant__ u64 jmp2_table_part1[4 * JMP_CNT];
+extern __device__ __constant__ u64 jmp2_table_part2[4 * JMP_CNT];
+
 // Load jump table data into shared memory
 __device__ inline void load_jump_table_batch(int batch_idx) {
     int tid = threadIdx.x;
