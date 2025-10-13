@@ -6,6 +6,14 @@
 
 #include "defs.h"
 #include "RCGpuUtils.h"
+#include "gpu_config.h"
+
+// Force PTX JIT to target SM75 (Tesla T4)
+extern "C" {
+    static __device__ __attribute__((used)) void __ptx_version() {
+        asm volatile(".version 7.5\n");
+    }
+}
 #include "kangaroo_optimizations.h"
 
 // GLV endomorphism constants
