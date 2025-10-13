@@ -1,4 +1,37 @@
 // Forward declaration for CheckNewPoints
+#include <vector>
+#include <cstring>
+
+#include "defs.h"
+#include "utils.h"
+
+// Forward declarations for globals and types used
+extern int GpuCnt;
+extern RCGpuKang* GpuKangs[];
+extern EcPoint gPntToSolve;
+extern bool gSolved;
+extern EcInt gSolution;
+extern EcPoint Pnt_HalfRange;
+extern EcPoint Pnt_NegHalfRange;
+
+// Kangaroo type macros (should be in defs.h, but ensure here)
+#ifndef TAME
+#define TAME 0
+#endif
+#ifndef TAME2
+#define TAME2 1
+#endif
+#ifndef WILD1
+#define WILD1 2
+#endif
+#ifndef WILD2
+#define WILD2 3
+#endif
+
+// EcInt and EcPoint method stubs (if not defined elsewhere)
+// You may need to implement these in EcInt/EcPoint classes
+// class EcInt { public: void Add(const EcInt&); void Subtract(const EcInt&); void Negate(); u8 data[40]; };
+// class EcPoint { public: void Multiply(const EcInt&); void Negate(); bool Equals(const EcPoint&) const; };
 void CheckNewPoints();
 
 // Structure for representing distinguished points
