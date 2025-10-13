@@ -10,78 +10,80 @@
 #include "utils.h"
 
 class EcInt
-	// Add for collision logic
-	void Add(const EcInt& val);
-	void Subtract(const EcInt& val);
-	void Negate();
 {
 public:
-	EcInt();
+    EcInt();
 
-	void Assign(EcInt& val);
-	void Set(u64 val);
-	void SetZero();
-	bool SetHexStr(const char* str);
-	void GetHexStr(char* str);
-	u16 GetU16(int index);
+    void Assign(EcInt& val);
+    void Set(u64 val);
+    void SetZero();
+    bool SetHexStr(const char* str);
+    void GetHexStr(char* str);
+    u16 GetU16(int index);
 
-	bool Add(EcInt& val); //returns true if carry
-	bool Sub(EcInt& val); //returns true if carry
-	void Neg();
-	void Neg256();
-	void ShiftRight(int nbits);
-	void ShiftLeft(int nbits);
-	bool IsLessThanU(EcInt& val);
-	bool IsLessThanI(EcInt& val);
-	bool IsEqual(EcInt& val);
-	bool IsZero();
+    bool Add(EcInt& val); //returns true if carry
+    bool Sub(EcInt& val); //returns true if carry
+    void Neg();
+    void Neg256();
+    void ShiftRight(int nbits);
+    void ShiftLeft(int nbits);
+    bool IsLessThanU(EcInt& val);
+    bool IsLessThanI(EcInt& val);
+    bool IsEqual(const EcInt& val) const;
+    bool IsZero();
 
-	void Mul_u64(EcInt& val, u64 multiplier);
-	void Mul_i64(EcInt& val, i64 multiplier);
+    void Mul_u64(EcInt& val, u64 multiplier);
+    void Mul_i64(EcInt& val, i64 multiplier);
 
-	void AddModP(EcInt& val);
-	void SubModP(EcInt& val);
-	void NegModP();
-	void MulModP(EcInt& val);
-	void InvModP();
-	void SqrtModP();
+    void AddModP(EcInt& val);
+    void SubModP(EcInt& val);
+    void NegModP();
+    void MulModP(EcInt& val);
+    void InvModP();
+    void SqrtModP();
 
-	void RndBits(int nbits);
-	void RndMax(EcInt& max);
+    void RndBits(int nbits);
+    void RndMax(EcInt& max);
 
-	// Methods for checkpoint serialization
-	const u64* GetWords() const { return data; }
-	void SetWords(const u64* words) { memcpy(data, words, sizeof(u64) * 4); data[4] = 0; }
+    // Methods for checkpoint serialization
+    const u64* GetWords() const { return data; }
+    void SetWords(const u64* words) { memcpy(data, words, sizeof(u64) * 4); data[4] = 0; }
 
-	u64 data[4 + 1];
+    // Added for collision logic
+    void Add(const EcInt& val);
+    void Subtract(const EcInt& val);
+    void Negate();
+
+    u64 data[4 + 1];
 };
 
 class EcPoint
-	// Add for collision logic
-	void Multiply(const EcInt& val);
-	void Negate();
-	bool Equals(const EcPoint& pnt) const;
 {
 public:
-	bool IsEqual(EcPoint& pnt);
-	void LoadFromBuffer64(u8* buffer);
-	void SaveToBuffer64(u8* buffer);
-	bool SetHexStr(const char* str);
-	EcInt x;
-	EcInt y;
+    bool IsEqual(EcPoint& pnt);
+    void LoadFromBuffer64(u8* buffer);
+    void SaveToBuffer64(u8* buffer);
+    bool SetHexStr(const char* str);
+    EcInt x;
+    EcInt y;
+
+    // Added for collision logic
+    void Multiply(const EcInt& val);
+    void Negate();
+    bool Equals(const EcPoint& pnt) const;
 };
 
 class Ec
 {
 public:
-	static EcPoint AddPoints(EcPoint& pnt1, EcPoint& pnt2);
-	static EcPoint DoublePoint(EcPoint& pnt);
-	static EcPoint MultiplyG(EcInt& k);
+    static EcPoint AddPoints(EcPoint& pnt1, EcPoint& pnt2);
+    static EcPoint DoublePoint(EcPoint& pnt);
+    static EcPoint MultiplyG(EcInt& k);
 #ifdef DEBUG_MODE
-	static EcPoint MultiplyG_Fast(EcInt& k);
+    static EcPoint MultiplyG_Fast(EcInt& k);
 #endif
-	static EcInt CalcY(EcInt& x, bool is_even);
-	static bool IsValidPoint(EcPoint& pnt);
+    static EcInt CalcY(EcInt& x, bool is_even);
+    static bool IsValidPoint(EcPoint& pnt);
 };
 
 void InitEc();

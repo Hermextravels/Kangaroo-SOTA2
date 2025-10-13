@@ -5,8 +5,12 @@
 
 
 #include <iostream>
+#ifdef NO_CUDA
+#include "cuda_stub.h"
+#else
 #include "cuda_runtime.h"
 #include "cuda.h"
+#endif
 
 #include "GpuKang.h"
 

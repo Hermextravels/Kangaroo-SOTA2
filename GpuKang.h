@@ -73,4 +73,6 @@ public:
 	u32 dbg[256];
 
 	int GetStatsSpeed();
+	// Expose DP output buffer for host-side processing
+	u32* GetDPOutput() { return DPs_out; }
 };

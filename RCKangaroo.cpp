@@ -34,6 +34,9 @@ extern EcPoint Pnt_NegHalfRange;
 // You may need to implement these in EcInt/EcPoint classes
 // class EcInt { public: void Add(const EcInt&); void Subtract(const EcInt&); void Negate(); u8 data[40]; };
 // class EcPoint { public: void Multiply(const EcInt&); void Negate(); bool Equals(const EcPoint&) const; };
+// Forward declaration for Collision_SOTA used by CheckNewPoints
+bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, bool IsNeg);
+
 void CheckNewPoints();
 
 // Structure for representing distinguished points
@@ -124,8 +127,12 @@ void CheckNewPoints() {
 #include <iostream>
 #include <vector>
 
+#ifdef NO_CUDA
+#include "cuda_stub.h"
+#else
 #include "cuda_runtime.h"
 #include "cuda.h"
+#endif
 
 #include "defs.h"
 #include "utils.h"

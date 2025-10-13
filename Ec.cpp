@@ -1,3 +1,13 @@
+// This file is a part of RCKangaroo software
+// (c) 2024, RetiredCoder (RC)
+// License: GPLv3, see "LICENSE.TXT" file
+// https://github.com/RetiredC
+
+#include "defs.h"
+#include "Ec.h"
+#include <random>
+#include "utils.h"
+
 // Add for collision logic
 void EcInt::Add(const EcInt& val) {
 	AddModP(const_cast<EcInt&>(val));
@@ -18,22 +28,12 @@ void EcPoint::Multiply(const EcInt& val) {
 
 void EcPoint::Negate() {
 	// Negate y coordinate (y = -y mod p)
-	y.Negate();
+	y.NegModP();
 }
 
 bool EcPoint::Equals(const EcPoint& pnt) const {
-	return x.IsEqual(const_cast<EcInt&>(pnt.x)) && y.IsEqual(const_cast<EcInt&>(pnt.y));
+	return x.IsEqual(pnt.x) && y.IsEqual(pnt.y);
 }
-// This file is a part of RCKangaroo software
-// (c) 2024, RetiredCoder (RC)
-// License: GPLv3, see "LICENSE.TXT" file
-// https://github.com/RetiredC
-
-
-#include "defs.h"
-#include "Ec.h"
-#include <random>
-#include "utils.h"
 
 // https://en.bitcoin.it/wiki/Secp256k1
 EcInt g_P; //FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFE FFFFFC2F
@@ -469,7 +469,7 @@ bool EcInt::IsLessThanI(EcInt& val)
 	return data[i] < val.data[i];
 }
 
-bool EcInt::IsEqual(EcInt& val)
+bool EcInt::IsEqual(const EcInt& val) const
 {
 	return memcmp(val.data, this->data, 40) == 0;
 }
