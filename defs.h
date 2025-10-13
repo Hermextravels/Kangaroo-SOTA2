@@ -8,6 +8,17 @@
 
 #pragma warning(disable : 4996)
 
+#ifdef __CUDACC__
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+#include <vector_types.h>
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#if defined(__CUDA_ARCH__) || !defined(__cplusplus)
 typedef unsigned long long u64;
 typedef long long i64;
 typedef unsigned int u32;
@@ -16,6 +27,50 @@ typedef unsigned short u16;
 typedef short i16;
 typedef unsigned char u8;
 typedef char i8;
+#else
+typedef unsigned long long u64;
+typedef long long i64;
+typedef unsigned int u32;
+typedef int i32;
+typedef unsigned short u16;
+typedef short i16;
+typedef unsigned char u8;
+typedef char i8;
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
+// Project-wide defines
+#define BLOCK_SIZE 256
+#define JMP_CNT 256
+#define PNT_GROUP_CNT 4
+#define INV_FLAG 0x8000
+#define JMP3_FLAG 0x1000
+#define JMP4_FLAG 0x0800
+#define JMP4_TRIGGER_MASK 0x0F00
+#define EMERGENCY_ESCAPE 4
+
+#ifndef __CUDACC__
+typedef unsigned long long u64;
+typedef long long i64;
+typedef unsigned int u32;
+typedef int i32;
+typedef unsigned short u16;
+typedef short i16;
+typedef unsigned char u8;
+typedef char i8;
+#else
+typedef unsigned long long u64;
+typedef long long i64;
+typedef unsigned int u32;
+typedef int i32;
+typedef unsigned short u16;
+typedef short i16;
+typedef unsigned char u8;
+typedef char i8;
+#endif
 
 
 
@@ -25,6 +80,7 @@ typedef char i8;
 #define STEP_CNT			1000
 
 #define JMP_CNT				512
+#define JMP4_CNT            512  // Size of emergency escape jump table
 
 //use different options for cards older than RTX 40xx
 #ifdef __CUDA_ARCH__
@@ -80,30 +136,32 @@ typedef char i8;
 //#define DEBUG_MODE
 
 //gpu kernel parameters
+// In defs.h, add Jumps4 to TKparams struct
 struct TKparams
 {
-	u64* Kangs;
-	u32 KangCnt;
-	u32 BlockCnt;
-	u32 BlockSize;
-	u32 GroupCnt;
-	u64* L2;
-	u64 DP;
-	u32* DPs_out;
-	u64* Jumps1; //x(32b), y(32b), d(32b)
-	u64* Jumps2; //x(32b), y(32b), d(32b)
-	u64* Jumps3; //x(32b), y(32b), d(32b)
-	u64* JumpsList; //list of all performed jumps, grouped by warp(32) every 8 groups (from PNT_GROUP_CNT). Each jump is 2 bytes: 10bit jump index + flags: INV_FLAG, DP_FLAG, JMP2_FLAG
-	u32* DPTable;
-	u32* L1S2;
-	u64* LastPnts;
-	u64* LoopTable;
-	u32* dbg_buf;
-	u32* LoopedKangs;
-	bool IsGenMode; //tames generation mode
+    u64* Kangs;
+    u32 KangCnt;
+    u32 BlockCnt;
+    u32 BlockSize;
+    u32 GroupCnt;
+    u64* L2;
+    u64 DP;
+    u32* DPs_out;
+    u64* Jumps1; //x(32b), y(32b), d(32b)
+    u64* Jumps4; //emergency escape jumps table
+    u64* Jumps2; //x(32b), y(32b), d(32b)
+    u64* Jumps3; //x(32b), y(32b), d(32b)
+    u64* Jumps4; //x(32b), y(32b), d(32b) - ADD THIS LINE
+    u64* JumpsList; //list of all performed jumps, grouped by warp(32) every 8 groups (from PNT_GROUP_CNT). Each jump is 2 bytes: 10bit jump index + flags: INV_FLAG, DP_FLAG, JMP2_FLAG
+    u32* DPTable;
+    u32* L1S2;
+    u64* LastPnts;
+    u64* LoopTable;
+    u32* dbg_buf;
+    u32* LoopedKangs;
+    bool IsGenMode; //tames generation mode
 
-	u32 KernelA_LDS_Size;
-	u32 KernelB_LDS_Size;
-	u32 KernelC_LDS_Size;	
+    u32 KernelA_LDS_Size;
+    u32 KernelB_LDS_Size;
+    u32 KernelC_LDS_Size;	
 };
-

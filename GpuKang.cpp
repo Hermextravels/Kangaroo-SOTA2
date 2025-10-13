@@ -310,6 +310,7 @@ void RCGpuKang::Stop()
 	StopFlag = true;
 }
 
+// In GpuKang.cpp, update GenerateRndDistances function:
 void RCGpuKang::GenerateRndDistances()
 {
     int GRP_SIZE = KangCnt / 4; // Use 4 groups now
