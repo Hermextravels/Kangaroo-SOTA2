@@ -43,14 +43,31 @@ typedef char i8;
 #endif
 
 // Project-wide defines
+// Only define these once, and let CUDA arch-specific code override as needed
+#ifndef BLOCK_SIZE
 #define BLOCK_SIZE 256
+#endif
+#ifndef JMP_CNT
 #define JMP_CNT 256
+#endif
+#ifndef PNT_GROUP_CNT
 #define PNT_GROUP_CNT 4
+#endif
+#ifndef INV_FLAG
 #define INV_FLAG 0x8000
+#endif
+#ifndef JMP3_FLAG
 #define JMP3_FLAG 0x1000
+#endif
+#ifndef JMP4_FLAG
 #define JMP4_FLAG 0x0800
+#endif
+#ifndef JMP4_TRIGGER_MASK
 #define JMP4_TRIGGER_MASK 0x0F00
+#endif
+#ifndef EMERGENCY_ESCAPE
 #define EMERGENCY_ESCAPE 4
+#endif
 
 #ifndef __CUDACC__
 typedef unsigned long long u64;
@@ -79,7 +96,7 @@ typedef char i8;
 //must be divisible by MD_LEN
 #define STEP_CNT			1000
 
-#define JMP_CNT				512
+// #define JMP_CNT				512
 #define JMP4_CNT            512  // Size of emergency escape jump table
 
 //use different options for cards older than RTX 40xx
@@ -151,7 +168,6 @@ struct TKparams
     u64* Jumps4; //emergency escape jumps table
     u64* Jumps2; //x(32b), y(32b), d(32b)
     u64* Jumps3; //x(32b), y(32b), d(32b)
-    u64* Jumps4; //x(32b), y(32b), d(32b) - ADD THIS LINE
     u64* JumpsList; //list of all performed jumps, grouped by warp(32) every 8 groups (from PNT_GROUP_CNT). Each jump is 2 bytes: 10bit jump index + flags: INV_FLAG, DP_FLAG, JMP2_FLAG
     u32* DPTable;
     u32* L1S2;
