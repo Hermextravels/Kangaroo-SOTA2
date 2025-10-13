@@ -13,6 +13,10 @@
 #include "defs.h"
 #include "utils.h"
 #include "GpuKang.h"
+#include "defs.h"
+
+// Forward declaration for Collision_SOTA
+bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, bool IsNeg);
 
 
 EcJMP EcJumps1[JMP_CNT];
