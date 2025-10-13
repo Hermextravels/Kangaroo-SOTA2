@@ -387,7 +387,8 @@ void AddPointsToList(u32* data, int pnt_cnt, u64 ops_cnt)
 	int dp_type_count[4] = {0, 0, 0, 0};
 	for (int i = 0; i < PntIndex; i++) {
 		DBRec nrec;
-		u8* p = pPntList2 + i * GPU_DP_SIZE;
+		// pPntList is where new points are copied into above; use it for processing
+		u8* p = pPntList + i * GPU_DP_SIZE;
 		memcpy(nrec.x, p, 12);
 		memcpy(nrec.d, p + 16, 22);
 		nrec.type = gGenMode ? TAME : p[40];
