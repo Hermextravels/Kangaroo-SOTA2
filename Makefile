@@ -27,7 +27,7 @@ else
 LDFLAGS := -L$(CUDA_PATH)/lib64 -lcudart -pthread
 endif
 
-CPU_SRC := RCKangaroo.cpp GpuKang.cpp Ec.cpp utils.cpp
+CPU_SRC := RCKangaroo.cpp GpuKang.cpp Ec.cpp utils.cpp globals.cpp
 ifdef NO_CUDA
 CPU_SRC += gpu_cpu_stubs.cpp
 endif
