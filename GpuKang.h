@@ -43,6 +43,7 @@ private:
 	EcJMP* EcJumps1;
 	EcJMP* EcJumps2;
 	EcJMP* EcJumps3;
+	EcJMP* EcJumps4;
 
 	EcPoint PntA;
 	EcPoint PntB;
