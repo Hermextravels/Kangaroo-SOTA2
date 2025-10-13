@@ -147,7 +147,7 @@ __global__ void KernelA(const TKparams Kparams)
 			LOAD_VAL_256(x0, L2x, group);
             LOAD_VAL_256(y0, L2y, group);
 			jmp_ind = x0[0] % JMP_CNT;
-			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
+			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table_part1 : jmp1_table;
 			Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 			Copy_int4_x2(jmp_y, jmp_table + 8 * jmp_ind + 4);
 			u32 inv_flag = (u32)y0[0] & 1;
@@ -303,7 +303,7 @@ __global__ void KernelA(const TKparams Kparams)
 	{
 		LOAD_VAL_256_m(x, Lx, group);
 		jmp_ind = x[0] % JMP_CNT;
-		jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
+	jmp_table = ((L1S2 >> group) & 1) ? jmp2_table_part1 : jmp1_table;
 		Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 		SubModP(tmp, x, jmp_x);
 		if (group == 0)
@@ -351,7 +351,7 @@ __global__ void KernelA(const TKparams Kparams)
 			LOAD_VAL_256_m(y0, Ly, group);
 
 			jmp_ind = x0[0] % JMP_CNT;
-			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
+		jmp_table = ((L1S2 >> group) & 1) ? jmp2_table_part1 : jmp1_table;
 			if (cached)
 			{
 				Copy_u64_x4(jmp_x, jmpx_cached); 
@@ -393,7 +393,7 @@ __global__ void KernelA(const TKparams Kparams)
 					LOAD_VAL_256_m(x0_cache, Lx, group + g_inc);
 					u32 jmp_tmp = x0_cache[0] % JMP_CNT;
 					__align__(16) u64 dx2[4];
-					u64* jmp_table_tmp = ((L1S2 >> (group + g_inc)) & 1) ? jmp2_table : jmp1_table;
+				u64* jmp_table_tmp = ((L1S2 >> (group + g_inc)) & 1) ? jmp2_table_part1 : jmp1_table;
 					Copy_int4_x2(jmpx_cached, jmp_table_tmp + 8 * jmp_tmp);
 					SubModP(dx2, x0_cache, jmpx_cached);
 					MulModP(tmp, t_cache, dx2); //t = s(-1)
@@ -454,7 +454,7 @@ __global__ void KernelA(const TKparams Kparams)
 		
 			//preps to calc next inv
 			jmp_ind = x[0] % JMP_CNT;
-			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
+		jmp_table = ((L1S2 >> group) & 1) ? jmp2_table_part1 : jmp1_table;
 			Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 			SubModP(dx, x, jmp_x);
 			if (group == g_beg)
