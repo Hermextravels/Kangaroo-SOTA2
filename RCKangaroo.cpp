@@ -4,12 +4,14 @@
 
 #include "defs.h"
 #include "utils.h"
+#include "GpuKang.h"   // for RCGpuKang
+#include "Ec.h"        // for EcPoint, EcInt
 
 // Forward declarations for globals and types used
 extern int GpuCnt;
 extern RCGpuKang* GpuKangs[];
 extern EcPoint gPntToSolve;
-extern bool gSolved;
+extern volatile bool gSolved;
 extern EcInt gSolution;
 extern EcPoint Pnt_HalfRange;
 extern EcPoint Pnt_NegHalfRange;
@@ -190,7 +192,7 @@ EcJMP EcJumps4[JMP_CNT];
 RCGpuKang* GpuKangs[MAX_GPU_CNT];
 int GpuCnt;
 volatile long ThrCnt;
-volatile bool gSolved;
+// ...existing code...
 
 EcInt Int_HalfRange;
 EcPoint Pnt_HalfRange;

@@ -1,3 +1,29 @@
+// Add for collision logic
+void EcInt::Add(const EcInt& val) {
+	AddModP(const_cast<EcInt&>(val));
+}
+
+void EcInt::Subtract(const EcInt& val) {
+	SubModP(const_cast<EcInt&>(val));
+}
+
+void EcInt::Negate() {
+	NegModP();
+}
+// Add for collision logic
+void EcPoint::Multiply(const EcInt& val) {
+	// Replace with actual scalar multiplication
+	*this = Ec::MultiplyG(const_cast<EcInt&>(val));
+}
+
+void EcPoint::Negate() {
+	// Negate y coordinate (y = -y mod p)
+	y.Negate();
+}
+
+bool EcPoint::Equals(const EcPoint& pnt) const {
+	return x.IsEqual(const_cast<EcInt&>(pnt.x)) && y.IsEqual(const_cast<EcInt&>(pnt.y));
+}
 // This file is a part of RCKangaroo software
 // (c) 2024, RetiredCoder (RC)
 // License: GPLv3, see "LICENSE.TXT" file

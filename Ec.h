@@ -10,6 +10,10 @@
 #include "utils.h"
 
 class EcInt
+	// Add for collision logic
+	void Add(const EcInt& val);
+	void Subtract(const EcInt& val);
+	void Negate();
 {
 public:
 	EcInt();
@@ -53,6 +57,10 @@ public:
 };
 
 class EcPoint
+	// Add for collision logic
+	void Multiply(const EcInt& val);
+	void Negate();
+	bool Equals(const EcPoint& pnt) const;
 {
 public:
 	bool IsEqual(EcPoint& pnt);
