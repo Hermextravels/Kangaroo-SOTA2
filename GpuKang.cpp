@@ -25,7 +25,7 @@ int RCGpuKang::CalcKangCnt()
 }
 
 //executes in main thread
-bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJumps1, EcJMP* _EcJumps2, EcJMP* _EcJumps3)
+bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJumps1, EcJMP* _EcJumps2, EcJMP* _EcJumps3, EcJMP* _EcJumps4)
 {
 	PntToSolve = _PntToSolve;
 	Range = _Range;
@@ -33,6 +33,7 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 	EcJumps1 = _EcJumps1;
 	EcJumps2 = _EcJumps2;
 	EcJumps3 = _EcJumps3;
+	EcJumps4 = _EcJumps4;
 	StopFlag = false;
 	Failed = false;
 	u64 total_mem = 0;
@@ -96,7 +97,9 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 		return false;
 	}
 
-	size = KangCnt * 96;
+
+	// Four kangaroos: each needs 16 u64 (128 bytes) per state
+	size = KangCnt * 128;
 	total_mem += size;
 	err = cudaMalloc((void**)&Kparams.Kangs, size);
 	if (err != cudaSuccess)

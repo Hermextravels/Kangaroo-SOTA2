@@ -64,7 +64,7 @@ struct DBRec
 {
 	u8 x[12];
 	u8 d[22];
-	u8 type; //0 - tame, 1 - wild1, 2 - wild2
+	u8 type; // 0 - tame1, 1 - tame2, 2 - wild1, 3 - wild2
 };
 #pragma pack(pop)
 
@@ -215,8 +215,8 @@ bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, 
 {
 	if (IsNeg)
 		t.Neg();
-	if (TameType == TAME)
-	{
+	// Four kangaroo types
+	if (TameType == TAME || TameType == TAME2) {
 		gPrivKey = t;
 		gPrivKey.Sub(w);
 		EcInt sv = gPrivKey;
@@ -229,9 +229,7 @@ bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, 
 		gPrivKey.Add(Int_HalfRange);
 		P = ec.MultiplyG(gPrivKey);
 		return P.IsEqual(pnt);
-	}
-	else
-	{
+	} else if (TameType == WILD1 || TameType == WILD2) {
 		gPrivKey = t;
 		gPrivKey.Sub(w);
 		if (gPrivKey.data[4] >> 63)
@@ -248,6 +246,7 @@ bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, 
 		P = ec.MultiplyG(gPrivKey);
 		return P.IsEqual(pnt);
 	}
+	return false;
 }
 
 
@@ -462,6 +461,18 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 		EcJumps3[i].dist.data[0] &= 0xFFFFFFFFFFFFFFFE; //must be even
 		EcJumps3[i].p = ec.MultiplyG(EcJumps3[i].dist);
 	}
+
+	// Fourth kangaroo jumps (customize as needed)
+	minjump.Set(1);
+	minjump.ShiftLeft(Range - 10 - 4); // slightly different for diversity
+	for (int i = 0; i < JMP_CNT; i++)
+	{
+		EcJumps4[i].dist = minjump;
+		t.RndMax(minjump);
+		EcJumps4[i].dist.Add(t);
+		EcJumps4[i].dist.data[0] &= 0xFFFFFFFFFFFFFFFE; //must be even
+		EcJumps4[i].p = ec.MultiplyG(EcJumps4[i].dist);
+	}
 	SetRndSeed(GetTickCount64());
 
 	Int_HalfRange.Set(1);
@@ -479,7 +490,7 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 
 //prepare GPUs
 	for (int i = 0; i < GpuCnt; i++)
-		if (!GpuKangs[i]->Prepare(PntToSolve, Range, DP, EcJumps1, EcJumps2, EcJumps3))
+		if (!GpuKangs[i]->Prepare(PntToSolve, Range, DP, EcJumps1, EcJumps2, EcJumps3, EcJumps4))
 		{
 			GpuKangs[i]->Failed = true;
 			printf("GPU %d Prepare failed\r\n", GpuKangs[i]->CudaIndex);

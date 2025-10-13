@@ -77,20 +77,34 @@ __global__ void KernelA(const TKparams Kparams)
 	u64 dp_mask64 = ~((1ull << (64 - Kparams.DP)) - 1);
 	u16 jmp_ind;
 
-	//copy kangs from global to L2
+	//copy kangs from global to L2 (now 4 kangaroos)
 	u32 kang_ind = PNT_GROUP_CNT * (THREAD_X + BLOCK_X * BLOCK_SIZE);
 	for (u32 group = 0; group < PNT_GROUP_CNT; group++)
-	{	
-		tmp[0] = Kparams.Kangs[(kang_ind + group) * 12 + 0];
-		tmp[1] = Kparams.Kangs[(kang_ind + group) * 12 + 1];
-		tmp[2] = Kparams.Kangs[(kang_ind + group) * 12 + 2];
-		tmp[3] = Kparams.Kangs[(kang_ind + group) * 12 + 3];
+	{
+		// Tame1
+		tmp[0] = Kparams.Kangs[(kang_ind + group) * 16 + 0];
+		tmp[1] = Kparams.Kangs[(kang_ind + group) * 16 + 1];
+		tmp[2] = Kparams.Kangs[(kang_ind + group) * 16 + 2];
+		tmp[3] = Kparams.Kangs[(kang_ind + group) * 16 + 3];
 		SAVE_VAL_256(L2x, tmp, group);
-		tmp[0] = Kparams.Kangs[(kang_ind + group) * 12 + 4];
-		tmp[1] = Kparams.Kangs[(kang_ind + group) * 12 + 5];
-		tmp[2] = Kparams.Kangs[(kang_ind + group) * 12 + 6];
-		tmp[3] = Kparams.Kangs[(kang_ind + group) * 12 + 7];
+		// Tame2
+		tmp[0] = Kparams.Kangs[(kang_ind + group) * 16 + 4];
+		tmp[1] = Kparams.Kangs[(kang_ind + group) * 16 + 5];
+		tmp[2] = Kparams.Kangs[(kang_ind + group) * 16 + 6];
+		tmp[3] = Kparams.Kangs[(kang_ind + group) * 16 + 7];
 		SAVE_VAL_256(L2y, tmp, group);
+		// Wild1
+		tmp[0] = Kparams.Kangs[(kang_ind + group) * 16 + 8];
+		tmp[1] = Kparams.Kangs[(kang_ind + group) * 16 + 9];
+		tmp[2] = Kparams.Kangs[(kang_ind + group) * 16 + 10];
+		tmp[3] = Kparams.Kangs[(kang_ind + group) * 16 + 11];
+		SAVE_VAL_256(L2s, tmp, group);
+		// Wild2
+		tmp[0] = Kparams.Kangs[(kang_ind + group) * 16 + 12];
+		tmp[1] = Kparams.Kangs[(kang_ind + group) * 16 + 13];
+		tmp[2] = Kparams.Kangs[(kang_ind + group) * 16 + 14];
+		tmp[3] = Kparams.Kangs[(kang_ind + group) * 16 + 15];
+		SAVE_VAL_256(L2s, tmp, group + PNT_GROUP_CNT); // store wild2 after wild1
 	}
 
 	u32 L1S2 = Kparams.L1S2[BLOCK_X * BLOCK_SIZE + THREAD_X];
@@ -105,7 +119,8 @@ __global__ void KernelA(const TKparams Kparams)
 		//first group
 		LOAD_VAL_256(x, L2x, 0);
 		jmp_ind = x[0] % JMP_CNT;
-		jmp_table = ((L1S2 >> 0) & 1) ? jmp2_table : jmp1_table;
+		// Use split jump tables for T4
+		jmp_table = ((L1S2 >> 0) & 1) ? jmp2_table_part1 : jmp1_table;
 		Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 		SubModP(inverse, x, jmp_x);
 		SAVE_VAL_256(L2s, inverse, 0);
@@ -114,7 +129,7 @@ __global__ void KernelA(const TKparams Kparams)
 		{
 			LOAD_VAL_256(x, L2x, group);
 			jmp_ind = x[0] % JMP_CNT;
-			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
+			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table_part1 : jmp1_table;
 			Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 			SubModP(tmp, x, jmp_x);
 			MulModP(inverse, inverse, tmp);
@@ -928,7 +943,11 @@ cudaError_t cuSetGpuParams(TKparams Kparams, u64* _jmp2_table)
 	err = cudaFuncSetAttribute(KernelC, cudaFuncAttributeMaxDynamicSharedMemorySize, Kparams.KernelC_LDS_Size);
 	if (err != cudaSuccess)
 		return err;
-	err = cudaMemcpyToSymbol(jmp2_table, _jmp2_table, JMP_CNT * 64);
+	// Copy to both split tables
+	err = cudaMemcpyToSymbol(jmp2_table_part1, _jmp2_table, JMP_CNT * 32); // first half
+	if (err != cudaSuccess)
+		return err;
+	err = cudaMemcpyToSymbol(jmp2_table_part2, _jmp2_table + (JMP_CNT * 4), JMP_CNT * 32); // second half
 	if (err != cudaSuccess)
 		return err;
 	return cudaSuccess;

@@ -60,10 +60,12 @@ struct CheckpointData {
 	#define PNT_GROUP_CNT		64
 #endif
 
-// kang type
-#define TAME				0  // Tame kangs
-#define WILD1				1  // Wild kangs1 
-#define WILD2				2  // Wild kangs2
+
+// Kangaroo types for four-kangaroo method
+#define TAME				0  // Tame kang 1
+#define TAME2				1  // Tame kang 2
+#define WILD1				2  // Wild kang 1
+#define WILD2				3  // Wild kang 2
 
 #define GPU_DP_SIZE			48
 #define MAX_DP_CNT			(256 * 1024)
