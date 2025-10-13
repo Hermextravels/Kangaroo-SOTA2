@@ -198,6 +198,8 @@ __global__ void KernelA(const TKparams Kparams)
 				ind = min(ind, DPTABLE_MAX_CNT - 1);
 				int4* dst = (int4*)(Kparams.DPTable + Kparams.KangCnt + (kang_ind * DPTABLE_MAX_CNT + ind) * 4);
 				dst[0] = ((int4*)x)[0];
+				// Set DP type explicitly: 0=TAME, 1=TAME2, 2=WILD1, 3=WILD2
+				dst[2].x = group; // store kangaroo type in DP buffer
 				jmp_ind |= DP_FLAG;
 			}
 

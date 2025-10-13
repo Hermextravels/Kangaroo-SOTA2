@@ -208,63 +208,7 @@ void AddPointsToList(u32* data, int pnt_cnt, u64 ops_cnt)
 	}
 	memcpy(pPntList + GPU_DP_SIZE * PntIndex, data, pnt_cnt * GPU_DP_SIZE);
 	PntIndex += pnt_cnt;
-	PntTotalOps += ops_cnt;
-	csAddPoints.Leave();
-}
-
-bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, bool IsNeg)
-{
-	if (IsNeg)
-		t.Neg();
-	// Four kangaroo types
-	if (TameType == TAME || TameType == TAME2) {
-		gPrivKey = t;
-		gPrivKey.Sub(w);
-		EcInt sv = gPrivKey;
-		gPrivKey.Add(Int_HalfRange);
-		EcPoint P = ec.MultiplyG(gPrivKey);
-		if (P.IsEqual(pnt))
-			return true;
-		gPrivKey = sv;
-		gPrivKey.Neg();
-		gPrivKey.Add(Int_HalfRange);
-		P = ec.MultiplyG(gPrivKey);
-		return P.IsEqual(pnt);
-	} else if (TameType == WILD1 || TameType == WILD2) {
-		gPrivKey = t;
-		gPrivKey.Sub(w);
-		if (gPrivKey.data[4] >> 63)
-			gPrivKey.Neg();
-		gPrivKey.ShiftRight(1);
-		EcInt sv = gPrivKey;
-		gPrivKey.Add(Int_HalfRange);
-		EcPoint P = ec.MultiplyG(gPrivKey);
-		if (P.IsEqual(pnt))
-			return true;
-		gPrivKey = sv;
-		gPrivKey.Neg();
-		gPrivKey.Add(Int_HalfRange);
-		P = ec.MultiplyG(gPrivKey);
-		return P.IsEqual(pnt);
-	}
-	return false;
-}
-
-
-void CheckNewPoints()
-{
-	csAddPoints.Enter();
-	if (!PntIndex)
-	{
-		csAddPoints.Leave();
-		return;
-	}
-
-	int cnt = PntIndex;
-	memcpy(pPntList2, pPntList, GPU_DP_SIZE * cnt);
-	PntIndex = 0;
-	csAddPoints.Leave();
-
+	int dp_type_count[4] = {0, 0, 0, 0};
 	for (int i = 0; i < cnt; i++)
 	{
 		DBRec nrec;
@@ -272,11 +216,75 @@ void CheckNewPoints()
 		memcpy(nrec.x, p, 12);
 		memcpy(nrec.d, p + 16, 22);
 		nrec.type = gGenMode ? TAME : p[40];
+		// Read DP type from device buffer (patch: use stored value)
+		if (!gGenMode) {
+			nrec.type = p[40]; // or reinterpret_cast<int*>(p)[10] if type stored in int4[2].x
+			if (nrec.type >= 0 && nrec.type < 4) dp_type_count[nrec.type]++;
+		}
 
 		DBRec* pref = (DBRec*)db.FindOrAddDataBlock((u8*)&nrec);
 		if (gGenMode)
 			continue;
 		if (pref)
+		{
+			//in db we dont store first 3 bytes so restore them
+			DBRec tmp_pref;
+			memcpy(&tmp_pref, &nrec, 3);
+			memcpy(((u8*)&tmp_pref) + 3, pref, sizeof(DBRec) - 3);
+			pref = &tmp_pref;
+
+			if (pref->type == nrec.type)
+			{
+				if (pref->type == TAME)
+					continue;
+
+				//if it's wild, we can find the key from the same type if distances are different
+				if (*(u64*)pref->d == *(u64*)nrec.d)
+					continue;
+				//else
+				//    ToLog("key found by same wild");
+			}
+
+			EcInt w, t;
+			int TameType, WildType;
+			if (pref->type != TAME)
+			{
+				memcpy(w.data, pref->d, sizeof(pref->d));
+				if (pref->d[21] == 0xFF) memset(((u8*)w.data) + 22, 0xFF, 18);
+				memcpy(t.data, nrec.d, sizeof(nrec.d));
+				if (nrec.d[21] == 0xFF) memset(((u8*)t.data) + 22, 0xFF, 18);
+				TameType = nrec.type;
+				WildType = pref->type;
+			}
+			else
+			{
+				memcpy(w.data, nrec.d, sizeof(nrec.d));
+				if (nrec.d[21] == 0xFF) memset(((u8*)w.data) + 22, 0xFF, 18);
+				memcpy(t.data, pref->d, sizeof(pref->d));
+				if (pref->d[21] == 0xFF) memset(((u8*)t.data) + 22, 0xFF, 18);
+				TameType = TAME;
+				WildType = nrec.type;
+			}
+
+			bool res = Collision_SOTA(gPntToSolve, t, TameType, w, WildType, false) || Collision_SOTA(gPntToSolve, t, TameType, w, WildType, true);
+			if (!res)
+			{
+				bool w12 = ((pref->type == WILD1) && (nrec.type == WILD2)) || ((pref->type == WILD2) && (nrec.type == WILD1));
+				if (w12) //in rare cases WILD and WILD2 can collide in mirror, in this case there is no way to find K
+					;// ToLog("W1 and W2 collides in mirror");
+				else
+				{
+					printf("Collision Error\r\n");
+					gTotalErrors++;
+				}
+				continue;
+			}
+			gSolved = true;
+			break;
+		}
+	}
+	// Debug output for DP type counts
+	printf("DPs extracted: TAME=%d, TAME2=%d, WILD1=%d, WILD2=%d\n", dp_type_count[0], dp_type_count[1], dp_type_count[2], dp_type_count[3]);
 		{
 			//in db we dont store first 3 bytes so restore them
 			DBRec tmp_pref;
