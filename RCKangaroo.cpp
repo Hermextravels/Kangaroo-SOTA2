@@ -262,6 +262,7 @@ void AddPointsToList(u32* data, int pnt_cnt, u64 ops_cnt)
 		}
 	}
 	printf("DPs extracted: TAME=%d, TAME2=%d, WILD1=%d, WILD2=%d\n", dp_type_count[0], dp_type_count[1], dp_type_count[2], dp_type_count[3]);
+}
 		{
 			//in db we dont store first 3 bytes so restore them
 			DBRec tmp_pref;
