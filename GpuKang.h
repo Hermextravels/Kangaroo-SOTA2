@@ -43,11 +43,9 @@ private:
 	EcJMP* EcJumps1;
 	EcJMP* EcJumps2;
 	EcJMP* EcJumps3;
-	EcJMP* EcJumps4; // New: Declaration for the fourth jump table
 
 	EcPoint PntA;
 	EcPoint PntB;
-	EcPoint PntC; // New: Declaration for the third wild start point
 
 	int cur_stats_ind;
 	int SpeedStats[STATS_WND_SIZE];
@@ -67,8 +65,7 @@ public:
 	bool IsOldGpu;
 
 	int CalcKangCnt();
-	bool Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJumps1, EcJMP* _EcJumps2, EcJMP* _EcJumps3, EcJMP* _EcJumps4);
-    // ... other methods ...
+	bool Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJumps1, EcJMP* _EcJumps2, EcJMP* _EcJumps3);
 	void Stop();
 	void Execute();
 

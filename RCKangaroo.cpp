@@ -13,12 +13,11 @@
 #include "defs.h"
 #include "utils.h"
 #include "GpuKang.h"
-#define RESUME_FILE_NAME "RESUME_KEY.TXT"
+
 
 EcJMP EcJumps1[JMP_CNT];
 EcJMP EcJumps2[JMP_CNT];
 EcJMP EcJumps3[JMP_CNT];
-EcJMP EcJumps4[JMP_CNT]; // New: Fourth jump table
 
 RCGpuKang* GpuKangs[MAX_GPU_CNT];
 int GpuCnt;
@@ -55,6 +54,10 @@ char gTamesFileName[1024];
 double gMax;
 bool gGenMode; //tames generation mode
 bool gIsOpsLimit;
+bool gResumeMode;
+char gCheckpointFile[1024];
+u32 gSubRangeCount;
+u32 gSubRangeIndex;
 
 #pragma pack(push, 1)
 struct DBRec
@@ -64,6 +67,52 @@ struct DBRec
 	u8 type; //0 - tame, 1 - wild1, 2 - wild2
 };
 #pragma pack(pop)
+
+void SaveCheckpoint()
+{
+    CheckpointData cp;
+    cp.checkpointVersion = 1;
+    cp.totalOps = TotalOps;
+    cp.pntIndex = PntIndex;
+    cp.currentStart = gStart;
+    
+    FILE* f = fopen(gCheckpointFile, "wb");
+    if (f) {
+        fwrite(&cp, sizeof(CheckpointData), 1, f);
+        fwrite(pPntList, sizeof(u8), PntIndex * sizeof(DBRec), f);
+        fclose(f);
+    }
+}
+
+bool LoadCheckpoint()
+{
+    CheckpointData cp;
+    FILE* f = fopen(gCheckpointFile, "rb");
+    if (!f) return false;
+    
+    if (fread(&cp, sizeof(CheckpointData), 1, f) != 1) {
+        fclose(f);
+        return false;
+    }
+    
+    if (cp.checkpointVersion != 1) {
+        fclose(f);
+        return false;
+    }
+    
+    TotalOps = cp.totalOps;
+    PntIndex = cp.pntIndex;
+    gStart = cp.currentStart;
+    
+    size_t bytesToRead = PntIndex * sizeof(DBRec);
+    if (fread(pPntList, 1, bytesToRead, f) != bytesToRead) {
+        fclose(f);
+        return false;
+    }
+    
+    fclose(f);
+    return true;
+}
 
 void InitGpus()
 {
@@ -401,18 +450,6 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 		EcJumps3[i].dist.data[0] &= 0xFFFFFFFFFFFFFFFE; //must be even
 		EcJumps3[i].p = ec.MultiplyG(EcJumps3[i].dist);
 	}
-
-	// Initialize fourth jump table for special escape sequences
-	minjump.Set(1);
-	minjump.ShiftLeft(Range - 8); // Extra large jumps for emergency escape
-	for (int i = 0; i < JMP_CNT; i++)
-	{
-		EcJumps4[i].dist = minjump;
-		t.RndMax(minjump);
-		EcJumps4[i].dist.Add(t);
-		EcJumps4[i].dist.data[0] &= 0xFFFFFFFFFFFFFFFE; //must be even
-		EcJumps4[i].p = ec.MultiplyG(EcJumps4[i].dist);
-	}
 	SetRndSeed(GetTickCount64());
 
 	Int_HalfRange.Set(1);
@@ -430,7 +467,7 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 
 //prepare GPUs
 	for (int i = 0; i < GpuCnt; i++)
-		if (!GpuKangs[i]->Prepare(PntToSolve, Range, DP, EcJumps1, EcJumps2, EcJumps3, EcJumps4))
+		if (!GpuKangs[i]->Prepare(PntToSolve, Range, DP, EcJumps1, EcJumps2, EcJumps3))
 		{
 			GpuKangs[i]->Failed = true;
 			printf("GPU %d Prepare failed\r\n", GpuKangs[i]->CudaIndex);
@@ -633,7 +670,7 @@ int main(int argc, char* argv[])
 #endif
 
 	printf("********************************************************************************\r\n");
-	printf("* RCKangaroo v3.0  (c) 2024 RetiredCoder                    *\r\n");
+	printf("*                    RCKangaroo v3.0  (c) 2024 RetiredCoder                    *\r\n");
 	printf("********************************************************************************\r\n\r\n");
 
 	printf("This software is free and open-source: https://github.com/RetiredC\r\n");
@@ -654,9 +691,13 @@ int main(int argc, char* argv[])
 	gRange = 0;
 	gStartSet = false;
 	gTamesFileName[0] = 0;
+	gCheckpointFile[0] = 0;
 	gMax = 0.0;
 	gGenMode = false;
 	gIsOpsLimit = false;
+	gResumeMode = false;
+	gSubRangeCount = 1;
+	gSubRangeIndex = 0;
 	memset(gGPUs_Mask, 1, sizeof(gGPUs_Mask));
 	if (!ParseCommandLine(argc, argv))
 		return 0;
@@ -678,167 +719,32 @@ int main(int argc, char* argv[])
 
 	if (!IsBench && !gGenMode)
 	{
-		printf("\r\nMAIN MODE - SUBRANGE SEARCH with Auto-Resume\r\n\r\n");
+		printf("\r\nMAIN MODE\r\n\r\n");
 		EcPoint PntToSolve, PntOfs;
-		EcInt pk_found;
+		EcInt pk, pk_found;
 
-		// 1. Define the full range bounds for Puzzle #135
-		// Key Range: 4000000000000000000000000000000000:7fffffffffffffffffffffffffffffffff
-		
-		EcInt FullRangeEnd;
-		FullRangeEnd.SetHexStr("7fffffffffffffffffffffffffffffffff");
-		
-		EcInt DefaultStart; // The absolute start of the puzzle's range (2^134)
-		DefaultStart.SetHexStr("4000000000000000000000000000000000");
+		PntToSolve = gPubKey;
+		if (!gStart.IsZero())
+		{
+			PntOfs = ec.MultiplyG(gStart);
+			PntOfs.y.NegModP();
+			PntToSolve = ec.AddPoints(PntToSolve, PntOfs);
+		}
 
-		// *** FIX for subtraction error: define EcInt for value 1 ***
-		EcInt IntOne;
-		IntOne.Set(1);
+		char sx[100], sy[100];
+		gPubKey.x.GetHexStr(sx);
+		gPubKey.y.GetHexStr(sy);
+		printf("Solving public key\r\nX: %s\r\nY: %s\r\n", sx, sy);
+		gStart.GetHexStr(sx);
+		printf("Offset: %s\r\n", sx);
 
-		EcInt CurrentStart;
-		
-		// **********************************************
-		// AUTO-RESUME LOGIC: Read last saved key
-		// **********************************************
-		char resume_hex[100] = { 0 };
-		FILE* fp_resume = fopen(RESUME_FILE_NAME, "r");
-		if (fp_resume)
+		if (!SolvePoint(PntToSolve, gRange, gDP, &pk_found))
 		{
-			if (fscanf(fp_resume, "%s", resume_hex) == 1)
-			{
-				CurrentStart.SetHexStr(resume_hex);
-				printf("Resuming from key found in %s: %s\r\n", RESUME_FILE_NAME, resume_hex);
-			}
-			fclose(fp_resume);
-		}
-		
-		// Priority: Command Line (-start) > Resume File > Puzzle Default
-		if (gStartSet)
-		{
-			CurrentStart = gStart;
-			printf("Command line -start argument overrides resume file.\r\n");
-		}
-		else if (CurrentStart.IsZero())
-		{
-			CurrentStart = DefaultStart;
-			printf("Starting from puzzle's default key: %s\r\n", "4000000000000000000000000000000000");
-		}
-		// **********************************************
-		
-		// Check if the necessary range parameter is set
-		if (gRange == 0)
-		{
-			printf("error: You must set a small subrange size using -range, e.g., -range 35\r\n");
+			if (!gIsOpsLimit)
+				printf("FATAL ERROR: SolvePoint failed\r\n");
 			goto label_end;
 		}
-		const int SUBRANGE_BITS = gRange;
-		
-		// Calculate the increment step (2^SUBRANGE_BITS)
-		EcInt RangeIncrement;
-		RangeIncrement.Set(1);
-		RangeIncrement.ShiftLeft(SUBRANGE_BITS);
-		
-		int CurrentChunk = 0;
-
-		char sx[100];
-		gPubKey.x.GetHexStr(sx);
-		printf("Target PubKey X: %s\r\n", sx);
-		gPubKey.y.GetHexStr(sx);
-		printf("Target PubKey Y: %s\r\n", sx);
-
-
-		// **********************************************
-		// START SUBRANGE SEARCH LOOP
-		// **********************************************
-		// FIX: Use IsLessThanU for comparison
-		while (CurrentStart.IsLessThanU(FullRangeEnd))
-		{
-			EcInt CurrentEnd = CurrentStart;
-			CurrentEnd.Add(RangeIncrement);
-			
-			// FIX: Subtract the EcInt 'IntOne'
-			CurrentEnd.Sub(IntOne); 
-			
-			// Clip the end if it exceeds the final range end.
-			// FIX: Check if (FullRangeEnd < CurrentEnd) which means (CurrentEnd > FullRangeEnd)
-			if (FullRangeEnd.IsLessThanU(CurrentEnd)) 
-			{
-				CurrentEnd = FullRangeEnd;
-			}
-			
-			// --- Set up the search parameters for this chunk ---
-			gStart = CurrentStart;
-			
-			// PntToSolve becomes P - gStart*G
-			PntToSolve = gPubKey;
-			PntOfs = ec.MultiplyG(gStart);
-			PntOfs.y.NegModP(); // PntOfs = -gStart*G
-			PntToSolve = ec.AddPoints(PntToSolve, PntOfs); // PntToSolve = P - gStart*G
-			
-			
-			printf("\r\n================================================================================\r\n");
-			gStart.GetHexStr(sx);
-			printf("CHUNK %d: Searching Range %d bits\r\n  Offset (Start): %s\r\n", CurrentChunk, SUBRANGE_BITS, sx);
-			CurrentEnd.GetHexStr(sx);
-			printf("  End: %s\r\n", sx);
-			printf("================================================================================\r\n");
-			
-			// **********************************************
-			// AUTO-RESUME LOGIC: Save the NEXT start key
-			// **********************************************
-			EcInt NextStart = CurrentStart;
-			NextStart.Add(RangeIncrement);
-
-			// Write the NEXT chunk's start key to the resume file
-			FILE* fp_save = fopen(RESUME_FILE_NAME, "w");
-			if (fp_save)
-			{
-				NextStart.GetHexStr(resume_hex);
-				fprintf(fp_save, "%s", resume_hex);
-				fclose(fp_save);
-			} else {
-				printf("WARNING: Could not write to resume file %s. Auto-resumption will fail on crash.\r\n", RESUME_FILE_NAME);
-			}
-			// **********************************************
-
-
-			// Call SolvePoint with the small range and offset
-			if (SolvePoint(PntToSolve, gRange, gDP, &pk_found))
-			{
-				// Collision found!
-				pk_found.Add(gStart); // Calculate the final key (relative + offset)
-				
-				// Delete the resume file on success
-				remove(RESUME_FILE_NAME); 
-
-				goto label_solved; 
-			}
-			
-			if (gIsOpsLimit)
-			{
-				// Ops limit was hit. The resume file is already updated with the NEXT chunk's start.
-				printf("Operation limit hit. Resume file %s updated. Re-run to continue.\r\n", RESUME_FILE_NAME);
-				goto label_end;
-			}
-			
-			// Move to the next chunk start
-			CurrentStart.Add(RangeIncrement);
-			CurrentChunk++;
-		}
-		// **********************************************
-		// END SUBRANGE SEARCH LOOP
-		// **********************************************
-		
-		printf("\r\nSEARCH COMPLETE: Key not found in the full range. Deleting resume file.\r\n");
-		remove(RESUME_FILE_NAME);
-		goto label_end;
-		
-
-	// The original code's "happy end" logic now becomes a target label.
-	label_solved: ;
-		// The key is already the absolute key: pk_found = relative_key + gStart
-
-		// Verify the final key
+		pk_found.AddModP(gStart);
 		EcPoint tmp = ec.MultiplyG(pk_found);
 		if (!tmp.IsEqual(gPubKey))
 		{
@@ -909,3 +815,4 @@ label_end:
 	free(pPntList2);
 	free(pPntList);
 }
+

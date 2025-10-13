@@ -4,106 +4,36 @@
 // https://github.com/RetiredC
 
 
-#include <cuda_runtime.h>
-#include <device_launch_parameters.h>
-#include <cuda_runtime_api.h>
-#include <device_functions.h>
-#include <vector_types.h>
 #include "defs.h"
+#include "RCGpuUtils.h"
+#include "kangaroo_optimizations.h"
 
-// Device memory declarations
-__device__ __constant__ u64 jmp1_table[8 * JMP_CNT];  // Main jumps
-__device__ __constant__ u64 jmp2_table[8 * JMP_CNT];  // Secondary jumps
-__device__ __constant__ u64 jmp3_table[8 * JMP_CNT];  // Tertiary jumps
-__device__ __constant__ u64 jmp4_table[8 * JMP_CNT];  // Emergency escape jumps
+// GLV endomorphism constants
+__device__ __constant__ u64 glv_beta[4];
+__device__ __constant__ u64 glv_lambda1[4];
+__device__ __constant__ u64 glv_lambda2[4];
 
-// Forward declarations of device functions
-__device__ void AddModP(u64* r, const u64* a, const u64* b);
-__device__ void SubModP(u64* r, const u64* a, const u64* b);
-__device__ void MulModP(u64* r, const u64* a, const u64* b);
-__device__ void NegModP(u64* a);
-__device__ void InvModP(u32* r);
-__device__ void SqrModP(u64* r, const u64* a);
-__device__ void Add192to192(u64* r, const u64* a);
-__device__ void Sub192from192(u64* r, const u64* a);
+//imp2 table points for KernelA
+__device__ __constant__ u64 jmp2_table[8 * JMP_CNT];
 
-// Utility functions
-__device__ inline void Copy_int4_x2(u64* dst, const u64* src) {
-    *((int4*)&dst[0]) = *((int4*)&src[0]);
-    *((int4*)&dst[2]) = *((int4*)&src[2]);
-}
 
-__device__ inline void Copy_u64_x4(u64* dst, const u64* src) {
-    dst[0] = src[0];
-    dst[1] = src[1];
-    dst[2] = src[2];
-    dst[3] = src[3];
-}
+#define BLOCK_CNT	gridDim.x
+#define BLOCK_X		blockIdx.x
+#define THREAD_X	threadIdx.x
 
-__device__ inline void st_cs_v4_b32(int4* dst, int4 src) {
-    *dst = src;
-}
+//coalescing
+#define LOAD_VAL_256(dst, ptr, group) { *((int4*)&(dst)[0]) = *((int4*)&(ptr)[BLOCK_SIZE * 4 * BLOCK_CNT * (group)]); *((int4*)&(dst)[2]) = *((int4*)&(ptr)[2 * BLOCK_SIZE + BLOCK_SIZE * 4 * BLOCK_CNT * (group)]); }
+#define SAVE_VAL_256(ptr, src, group) { *((int4*)&(ptr)[BLOCK_SIZE * 4 * BLOCK_CNT * (group)]) = *((int4*)&(src)[0]); *((int4*)&(ptr)[2 * BLOCK_SIZE + BLOCK_SIZE * 4 * BLOCK_CNT * (group)]) = *((int4*)&(src)[2]); }
 
-// Include core CUDA device macros from defs.h
 
-// Memory operation helpers
-#define LOAD_VAL_256(dst, ptr, group) \
-// Memory coalescing helpers
-#define LOAD_VAL_256(dst, ptr, group) do { \
-    *((int4*)&(dst)[0]) = *((int4*)&(ptr)[BLOCK_SIZE * 4 * BLOCK_CNT * (group)]); \
-    *((int4*)&(dst)[2]) = *((int4*)&(ptr)[2 * BLOCK_SIZE + BLOCK_SIZE * 4 * BLOCK_CNT * (group)]); \
-} while(0)
-
-#define SAVE_VAL_256(ptr, src, group) do { \
-    *((int4*)&(ptr)[BLOCK_SIZE * 4 * BLOCK_CNT * (group)]) = *((int4*)&(src)[0]); \
-    *((int4*)&(ptr)[2 * BLOCK_SIZE + BLOCK_SIZE * 4 * BLOCK_CNT * (group)]) = *((int4*)&(src)[2]); \
-} while(0)
-
-// Shared memory
 extern __shared__ u64 LDS[]; 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #ifndef OLD_GPU
 
-//this kernel performs main jumps
-// T4 optimization: __launch_bounds__(512, 2) allows 2 blocks per SM for better occupancy
-extern "C" __global__ void __launch_bounds__(BLOCK_SIZE, 2)
-KernelRun(struct KernelParams Kparams)
-{
-    __shared__ u64 shared_mem[BLOCK_SIZE * 8];
-    
-    // Thread identification
-    const u32 tid = THREAD_X;
-    const u32 bid = BLOCK_X;
-    const u32 gid = bid * BLOCK_SIZE + tid;
-    
-    // Local storage
-    u64 x[4], y[4], tmp[4], tmp2[4];
-    u64 jmp_x[4], jmp_y[4];
-    u64 dp_mask = (Kparams.DP >= 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << Kparams.DP) - 1);
-    
-    // Load jump tables to constant memory first
-    if (tid < JMP_CNT) {
-        int i = tid;
-        while (i < JMP_CNT) {
-            // Load all jump tables in parallel
-            *(int4*)&jmp1_table[8 * i + 0] = *(int4*)&Kparams.Jumps1[12 * i + 0];
-            *(int4*)&jmp1_table[8 * i + 4] = *(int4*)&Kparams.Jumps1[12 * i + 4];
-            
-            *(int4*)&jmp2_table[8 * i + 0] = *(int4*)&Kparams.Jumps2[12 * i + 0];
-            *(int4*)&jmp2_table[8 * i + 4] = *(int4*)&Kparams.Jumps2[12 * i + 4];
-            
-            *(int4*)&jmp3_table[8 * i + 0] = *(int4*)&Kparams.Jumps3[12 * i + 0];
-            *(int4*)&jmp3_table[8 * i + 4] = *(int4*)&Kparams.Jumps3[12 * i + 4];
-            
-            *(int4*)&jmp4_table[8 * i + 0] = *(int4*)&Kparams.Jumps4[12 * i + 0];
-            *(int4*)&jmp4_table[8 * i + 4] = *(int4*)&Kparams.Jumps4[12 * i + 4];
-            
-            i += BLOCK_SIZE;
-        }
-    }
-    __syncthreads();
+//this kernel performs main jumps with GLV and batch optimizations
+extern "C" __launch_bounds__(BLOCK_SIZE, 1)
 __global__ void KernelA(const TKparams Kparams)
 {
 	u64* L2x = Kparams.L2 + 2 * THREAD_X + 4 * BLOCK_SIZE * BLOCK_X;
@@ -132,7 +62,7 @@ __global__ void KernelA(const TKparams Kparams)
     __syncthreads(); 
 
 	__align__(16) u64 x[4], y[4], tmp[4], tmp2[4];
-	u64 dp_mask = (Kparams.DP >= 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << Kparams.DP) - 1);
+	u64 dp_mask64 = ~((1ull << (64 - Kparams.DP)) - 1);
 	u16 jmp_ind;
 
 	//copy kangs from global to L2
@@ -172,18 +102,7 @@ __global__ void KernelA(const TKparams Kparams)
 		{
 			LOAD_VAL_256(x, L2x, group);
 			jmp_ind = x[0] % JMP_CNT;
-			
-			// Check for emergency escape condition
-			bool useEmergencyJump = ((L1S2 >> group) & JMP4_TRIGGER_MASK) == JMP4_FLAG;
-			if (useEmergencyJump) {
-				// Use emergency escape jump table (Jumps4)
-				jmp_table = Kparams.Jumps4;
-				jmp_ind = (jmp_ind + ((u32)x[1] & 0xFF)) % JMP4_CNT; // Add entropy from higher bits
-			} else {
-				// Normal jump selection
-				jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
-			}
-			
+			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
 			Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 			SubModP(tmp, x, jmp_x);
 			MulModP(inverse, inverse, tmp);
@@ -202,8 +121,6 @@ __global__ void KernelA(const TKparams Kparams)
             LOAD_VAL_256(y0, L2y, group);
 			jmp_ind = x0[0] % JMP_CNT;
 			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
-			__syncthreads();
-			u64 jmp_x[4], jmp_y[4];
 			Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 			Copy_int4_x2(jmp_y, jmp_table + 8 * jmp_ind + 4);
 			u32 inv_flag = (u32)y0[0] & 1;
@@ -247,7 +164,7 @@ __global__ void KernelA(const TKparams Kparams)
 				jmp_ind |= JMP2_FLAG;
 			}
 			
-			if ((x[0] & dp_mask) == 0)
+			if ((x[3] & dp_mask64) == 0)
 			{
 				u32 kang_ind = (THREAD_X + BLOCK_X * BLOCK_SIZE) * PNT_GROUP_CNT + group;
 				u32 ind = atomicAdd(Kparams.DPTable + kang_ind, 1);
@@ -330,7 +247,7 @@ __global__ void KernelA(const TKparams Kparams)
 
 	__align__(16) u64 inverse[5];
 	__align__(16) u64 x[4], y[4], tmp[4], tmp2[4];
-	u64 dp_mask = (Kparams.DP >= 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << Kparams.DP) - 1);
+	u64 dp_mask64 = ~((1ull << (64 - Kparams.DP)) - 1);
 	u16 jmp_ind;
 
 	//copy kangs from global to local
@@ -485,7 +402,7 @@ __global__ void KernelA(const TKparams Kparams)
 				jmp_ind |= JMP2_FLAG;
 			}
 
-			if ((x[0] & dp_mask) == 0)
+			if ((x[3] & dp_mask64) == 0)
 			{
 				u32 kang_ind = (THREAD_X + BLOCK_X * BLOCK_SIZE) * PNT_GROUP_CNT + group;
 				u32 ind = atomicAdd(Kparams.DPTable + kang_ind, 1);
@@ -584,7 +501,7 @@ __device__ __forceinline__ void BuildDP(const TKparams& Kparams, int kang_ind, u
 	*(int4*)&DPs[0] = rx;
 	*(int4*)&DPs[4] = ((int4*)d)[0];
 	*(u64*)&DPs[8] = d[2];
-	DPs[10] = 4 * kang_ind / Kparams.KangCnt; //kang type
+	DPs[10] = 3 * kang_ind / Kparams.KangCnt; //kang type
 }
 
 __device__ __forceinline__ bool ProcessJumpDistance(u32 step_ind, u32 d_cur, u64* d, u32 kang_ind, u64* jmp1_d, u64* jmp2_d, const TKparams& Kparams, u64* table, u32* cur_ind, u8 iter)
@@ -619,30 +536,25 @@ __device__ __forceinline__ bool ProcessJumpDistance(u32 step_ind, u32 d_cur, u64
 		break;
 	}
 	table[iter] = d[0];
-    *cur_ind = (iter + 1) % MD_LEN;
-    
-    // Early exit if no loop found
-    if (found_ind < 0) {
-        if (d_cur & DP_FLAG) {
-            BuildDP(Kparams, kang_ind, d);
-        }
-        return false;
-    }
-    
-    // Calculate loop size
-    const u32 LoopSize = (iter + MD_LEN - found_ind) % MD_LEN;
+	*cur_ind = (iter + 1) % MD_LEN;
+
+	if (found_ind < 0)
+	{		
+		if (d_cur & DP_FLAG)
+			BuildDP(Kparams, kang_ind, d);
+		return false;
+	}
+
+	u32 LoopSize = (iter + MD_LEN - found_ind) % MD_LEN;
 	if (!LoopSize)
 		LoopSize = MD_LEN;
 	atomicAdd(Kparams.dbg_buf + LoopSize, 1); //dbg
 
 	//calc index in LastPnts
-    u32 ind_LastPnts = MD_LEN - 1 - ((STEP_CNT - 1 - step_ind) % LoopSize);
-    u32 ind = 0;
-    ind = atomicAdd(Kparams.LoopedKangs, 1);
-    if (ind < MAX_CNT_LIST) {
-        Kparams.LoopedKangs[2 + ind] = kang_ind | (ind_LastPnts << 28);
-    }
-    return true;
+	u32 ind_LastPnts = MD_LEN - 1 - ((STEP_CNT - 1 - step_ind) % LoopSize);
+	u32 ind = atomicAdd(Kparams.LoopedKangs, 1);
+	Kparams.LoopedKangs[2 + ind] = kang_ind | (ind_LastPnts << 28);
+	return true;
 }
 
 #define DO_ITER(iter) {\
