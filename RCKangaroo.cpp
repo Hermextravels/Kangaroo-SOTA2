@@ -1,5 +1,10 @@
 // Forward declaration for CheckNewPoints
 void CheckNewPoints();
+
+// Minimal stub implementation for CheckNewPoints
+void CheckNewPoints() {
+	// TODO: Implement real DP extraction/check logic
+}
 // This file is a part of RCKangaroo software
 // (c) 2024, RetiredCoder (RC)
 // License: GPLv3, see "LICENSE.TXT" file
@@ -19,6 +24,12 @@ void CheckNewPoints();
 
 // Forward declaration for Collision_SOTA
 bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, bool IsNeg);
+
+// Minimal stub implementation for Collision_SOTA
+bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, bool IsNeg) {
+	// TODO: Implement real collision logic
+	return false;
+}
 
 
 EcJMP EcJumps1[JMP_CNT];
