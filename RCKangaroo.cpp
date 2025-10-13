@@ -267,64 +267,6 @@ void AddPointsToList(u32* data, int pnt_cnt, u64 ops_cnt)
 	}
 	printf("DPs extracted: TAME=%d, TAME2=%d, WILD1=%d, WILD2=%d\n", dp_type_count[0], dp_type_count[1], dp_type_count[2], dp_type_count[3]);
 }
-		{
-			//in db we dont store first 3 bytes so restore them
-			DBRec tmp_pref;
-			memcpy(&tmp_pref, &nrec, 3);
-			memcpy(((u8*)&tmp_pref) + 3, pref, sizeof(DBRec) - 3);
-			pref = &tmp_pref;
-
-			if (pref->type == nrec.type)
-			{
-				if (pref->type == TAME)
-					continue;
-
-				//if it's wild, we can find the key from the same type if distances are different
-				if (*(u64*)pref->d == *(u64*)nrec.d)
-					continue;
-				//else
-				//	ToLog("key found by same wild");
-			}
-
-			EcInt w, t;
-			int TameType, WildType;
-			if (pref->type != TAME)
-			{
-				memcpy(w.data, pref->d, sizeof(pref->d));
-				if (pref->d[21] == 0xFF) memset(((u8*)w.data) + 22, 0xFF, 18);
-				memcpy(t.data, nrec.d, sizeof(nrec.d));
-				if (nrec.d[21] == 0xFF) memset(((u8*)t.data) + 22, 0xFF, 18);
-				TameType = nrec.type;
-				WildType = pref->type;
-			}
-			else
-			{
-				memcpy(w.data, nrec.d, sizeof(nrec.d));
-				if (nrec.d[21] == 0xFF) memset(((u8*)w.data) + 22, 0xFF, 18);
-				memcpy(t.data, pref->d, sizeof(pref->d));
-				if (pref->d[21] == 0xFF) memset(((u8*)t.data) + 22, 0xFF, 18);
-				TameType = TAME;
-				WildType = nrec.type;
-			}
-
-			bool res = Collision_SOTA(gPntToSolve, t, TameType, w, WildType, false) || Collision_SOTA(gPntToSolve, t, TameType, w, WildType, true);
-			if (!res)
-			{
-				bool w12 = ((pref->type == WILD1) && (nrec.type == WILD2)) || ((pref->type == WILD2) && (nrec.type == WILD1));
-				if (w12) //in rare cases WILD and WILD2 can collide in mirror, in this case there is no way to find K
-					;// ToLog("W1 and W2 collides in mirror");
-				else
-				{
-					printf("Collision Error\r\n");
-					gTotalErrors++;
-				}
-				continue;
-			}
-			gSolved = true;
-			break;
-		}
-	}
-}
 
 void ShowStats(u64 tm_start, double exp_ops, double dp_val)
 {
