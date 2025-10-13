@@ -1,3 +1,5 @@
+// Forward declaration for CheckNewPoints
+void CheckNewPoints();
 // This file is a part of RCKangaroo software
 // (c) 2024, RetiredCoder (RC)
 // License: GPLv3, see "LICENSE.TXT" file
