@@ -8,10 +8,28 @@
 
 #pragma warning(disable : 4996)
 
+// Include CUDA headers first
 #ifdef __CUDACC__
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <vector_types.h>
+#endif
+
+// Default configurations
+#ifndef BLOCK_SIZE
+#define BLOCK_SIZE 256
+#endif
+
+#ifndef JMP_CNT
+#define JMP_CNT 256
+#endif
+
+#ifndef PNT_GROUP_CNT
+#define PNT_GROUP_CNT 4
+#endif
+
+#ifndef INV_FLAG
+#define INV_FLAG 0x8000
 #endif
 
 #ifdef __cplusplus

@@ -668,25 +668,30 @@ __device__ __forceinline__ bool ProcessJumpDistance(u32 step_ind, u32 d_cur, u64
 		break;
 	}
 	table[iter] = d[0];
-	*cur_ind = (iter + 1) % MD_LEN;
-
-	if (found_ind < 0)
-	{		
-		if (d_cur & DP_FLAG)
-			BuildDP(Kparams, kang_ind, d);
-		return false;
-	}
-
-	u32 LoopSize = (iter + MD_LEN - found_ind) % MD_LEN;
+    *cur_ind = (iter + 1) % MD_LEN;
+    
+    // Early exit if no loop found
+    if (found_ind < 0) {
+        if (d_cur & DP_FLAG) {
+            BuildDP(Kparams, kang_ind, d);
+        }
+        return false;
+    }
+    
+    // Calculate loop size
+    const u32 LoopSize = (iter + MD_LEN - found_ind) % MD_LEN;
 	if (!LoopSize)
 		LoopSize = MD_LEN;
 	atomicAdd(Kparams.dbg_buf + LoopSize, 1); //dbg
 
 	//calc index in LastPnts
-	u32 ind_LastPnts = MD_LEN - 1 - ((STEP_CNT - 1 - step_ind) % LoopSize);
-	u32 ind = atomicAdd(Kparams.LoopedKangs, 1);
-	Kparams.LoopedKangs[2 + ind] = kang_ind | (ind_LastPnts << 28);
-	return true;
+    u32 ind_LastPnts = MD_LEN - 1 - ((STEP_CNT - 1 - step_ind) % LoopSize);
+    u32 ind = 0;
+    ind = atomicAdd(Kparams.LoopedKangs, 1);
+    if (ind < MAX_CNT_LIST) {
+        Kparams.LoopedKangs[2 + ind] = kang_ind | (ind_LastPnts << 28);
+    }
+    return true;
 }
 
 #define DO_ITER(iter) {\
