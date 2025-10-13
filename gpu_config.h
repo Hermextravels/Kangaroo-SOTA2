@@ -19,13 +19,11 @@
 #define USE_SHARED_MEMORY_CACHE 1
 #define L1_CACHE_PREFERENCE cudaFuncCachePreferL1
 
-// Thread configuration
-#ifndef OLD_GPU
-    #define BLOCK_SIZE 256            // Optimal for T4
-    #define PNT_GROUP_CNT 32         // Adjusted for T4's memory hierarchy
-    #define WARPS_PER_BLOCK 8        // 256/32
-    #define MAX_BLOCKS_PER_SM 16     // T4 specific
-#endif
+// Thread configuration for T4
+#define T4_BLOCK_SIZE 256
+#define T4_PNT_GROUP_CNT 32
+#define T4_WARPS_PER_BLOCK 8
+#define T4_MAX_BLOCKS_PER_SM 16
 
 // Register optimization
 #define MAX_REGISTERS_PER_THREAD 64  // Limit register usage for better occupancy

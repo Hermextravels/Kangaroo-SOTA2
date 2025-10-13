@@ -8,12 +8,14 @@
 #include "RCGpuUtils.h"
 #include "gpu_config.h"
 
-// Force PTX JIT to target SM75 (Tesla T4)
-extern "C" {
-    static __device__ __attribute__((used)) void __ptx_version() {
-        asm volatile(".version 7.5\n");
-    }
-}
+// T4-specific optimizations
+#ifdef __CUDA_ARCH__
+    #if __CUDA_ARCH__ >= 750
+        #pragma push
+        #pragma optimize(5)
+        #define USE_T4_OPTIMIZATIONS
+    #endif
+#endif
 #include "kangaroo_optimizations.h"
 
 // GLV endomorphism constants

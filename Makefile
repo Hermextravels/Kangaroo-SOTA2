@@ -4,9 +4,12 @@ NVCC := $(CUDA_PATH)/bin/nvcc
 
 
 CCFLAGS := -O3 -I$(CUDA_PATH)/include -I. -march=native -mtune=native
-NVCCFLAGS := -O3 --use_fast_math --ptxas-options=-v \
+NVCCFLAGS := -O3 --use_fast_math --ptxas-options="-v -dlcm=ca" \
              -gencode=arch=compute_75,code=sm_75 \
              -maxrregcount=64 \
+             --extra-device-vectorization \
+             --gpu-architecture=sm_75 \
+             --ftz=true --prec-div=false --prec-sqrt=false \
              -Xcompiler "-O3 -march=native -mtune=native"
 LDFLAGS := -L$(CUDA_PATH)/lib64 -lcudart -pthread
 
