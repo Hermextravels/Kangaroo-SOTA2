@@ -4,6 +4,7 @@
 // https://github.com/RetiredC
 
 
+#define CUDA_ARCH
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <cuda_runtime_api.h>
@@ -11,18 +12,30 @@
 #include <vector_types.h>
 #include "defs.h"
 
-// Device memory declarations
-__device__ __constant__ u64 jmp1_table[8 * JMP_CNT];  // Main jumps
-__device__ __constant__ u64 jmp2_table[8 * JMP_CNT];  // Secondary jumps
-__device__ __constant__ u64 jmp3_table[8 * JMP_CNT];  // Tertiary jumps
-__device__ __constant__ u64 jmp4_table[8 * JMP_CNT];  // Emergency escape jumps
+// Device functions
+__device__ inline void Copy_int4_x2(u64* dst, const u64* src) {
+    *((int4*)&dst[0]) = *((int4*)&src[0]);
+    *((int4*)&dst[2]) = *((int4*)&src[2]);
+}
 
-// Forward declarations of device functions
-__device__ void AddModP(u64* r, const u64* a, const u64* b);
-__device__ void SubModP(u64* r, const u64* a, const u64* b);
-__device__ void MulModP(u64* r, const u64* a, const u64* b);
-__device__ void NegModP(u64* a);
-__device__ void Copy_int4_x2(u64* dst, const u64* src);
+// Constant memory jump tables
+__device__ __constant__ u64 jmp1_table[8 * JMP_CNT];
+__device__ __constant__ u64 jmp2_table[8 * JMP_CNT];
+__device__ __constant__ u64 jmp3_table[8 * JMP_CNT];
+__device__ __constant__ u64 jmp4_table[8 * JMP_CNT];
+
+// Cuda kernel configuration
+#ifndef BLOCK_SIZE
+#define BLOCK_SIZE 256
+#endif
+
+#ifndef JMP_CNT
+#define JMP_CNT 256
+#endif
+
+#ifndef PNT_GROUP_CNT
+#define PNT_GROUP_CNT 4
+#endif
 
 // GPU kernel macros
 #define THREAD_X threadIdx.x
@@ -44,23 +57,36 @@ __device__ void Copy_int4_x2(u64* dst, const u64* src);
 #define BLOCK_SIZE 256
 #endif
 
-// Thread index helpers
-#define BLOCK_CNT   gridDim.x
-#define BLOCK_X     blockIdx.x
-#define THREAD_X    threadIdx.x
+struct KernelParams {
+    u32 DP;
+    u32 GroupCnt;
+    u64* L2;      // Points x,y coordinates
+    u64* L2s;     // Temporary storage
+    u32* DPs_out; // Distinguished point flags
+    u64* Jumps1;  // Main jump table
+    u64* Jumps4;  // Emergency escape jumps
+    u64* Jumps2;  // Second jump table
+    u64* Jumps3;  // Third jump table
+    u32* DPTable; // Distinguished point lookup table
+    u32* L1S2;    // L1 state flags
+};
 
-// Memory operation helpers
-#define LOAD_VAL_256(dst, ptr, group) \
-    do { \
-        *((int4*)&(dst)[0]) = *((int4*)&(ptr)[BLOCK_SIZE * 4 * BLOCK_CNT * (group)]); \
-        *((int4*)&(dst)[2]) = *((int4*)&(ptr)[2 * BLOCK_SIZE + BLOCK_SIZE * 4 * BLOCK_CNT * (group)]); \
-    } while(0)
+#define TAME                 0
+#define WILD1                1
+#define WILD2                2
+#define WILD3                3
+#define JMP3_FLAG            0x1000
+#define JMP4_FLAG            0x0800
+#define EMERGENCY_ESCAPE     4   // New state for emergency escape jumps
+#define JMP4_TRIGGER_MASK    0x0F00  // Mask to check for emergency escape conditions
+#include "RCGpuUtils.h"
 
-#define SAVE_VAL_256(ptr, src, group) \
-    do { \
-        *((int4*)&(ptr)[BLOCK_SIZE * 4 * BLOCK_CNT * (group)]) = *((int4*)&(src)[0]); \
-        *((int4*)&(ptr)[2 * BLOCK_SIZE + BLOCK_SIZE * 4 * BLOCK_CNT * (group)]) = *((int4*)&(src)[2]); \
-    } while(0)
+
+//jump tables for all kernels
+__device__ __constant__ u64 jmp1_table[8 * JMP_CNT];
+__device__ __constant__ u64 jmp2_table[8 * JMP_CNT];
+__device__ __constant__ u64 jmp3_table[8 * JMP_CNT];
+__device__ __constant__ u64 jmp4_table[8 * JMP_CNT]; // Emergency escape jumps
 
 
 #define BLOCK_CNT	gridDim.x
@@ -88,40 +114,6 @@ extern __shared__ u64 LDS[];
 //this kernel performs main jumps
 // T4 optimization: __launch_bounds__(512, 2) allows 2 blocks per SM for better occupancy
 extern "C" __global__ void __launch_bounds__(BLOCK_SIZE, 2)
-KernelRun(struct TKparams Kparams)
-{
-    __shared__ u64 shared_mem[BLOCK_SIZE * 8];
-    
-    // Thread identification
-    const u32 tid = THREAD_X;
-    const u32 bid = BLOCK_X;
-    const u32 gid = bid * BLOCK_SIZE + tid;
-    
-    // Local storage
-    u64 x[4], y[4], tmp[4], tmp2[4];
-    u64 jmp_x[4], jmp_y[4];
-    
-    // Load jump tables to constant memory first
-    if (tid < JMP_CNT) {
-        int i = tid;
-        while (i < JMP_CNT) {
-            // Load all jump tables in parallel
-            *(int4*)&jmp1_table[8 * i + 0] = *(int4*)&Kparams.Jumps1[12 * i + 0];
-            *(int4*)&jmp1_table[8 * i + 4] = *(int4*)&Kparams.Jumps1[12 * i + 4];
-            
-            *(int4*)&jmp2_table[8 * i + 0] = *(int4*)&Kparams.Jumps2[12 * i + 0];
-            *(int4*)&jmp2_table[8 * i + 4] = *(int4*)&Kparams.Jumps2[12 * i + 4];
-            
-            *(int4*)&jmp3_table[8 * i + 0] = *(int4*)&Kparams.Jumps3[12 * i + 0];
-            *(int4*)&jmp3_table[8 * i + 4] = *(int4*)&Kparams.Jumps3[12 * i + 4];
-            
-            *(int4*)&jmp4_table[8 * i + 0] = *(int4*)&Kparams.Jumps4[12 * i + 0];
-            *(int4*)&jmp4_table[8 * i + 4] = *(int4*)&Kparams.Jumps4[12 * i + 4];
-            
-            i += BLOCK_SIZE;
-        }
-    }
-    __syncthreads();
 KernelRun(KernelParams Kparams)
 {
     __shared__ u64 shared_mem[BLOCK_SIZE * 8];
