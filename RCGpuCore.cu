@@ -7,6 +7,7 @@
 #include "defs.h"
 #include "RCGpuUtils.h"
 #include "gpu_config.h"
+#include "memory_management.cuh"
 
 // T4-specific optimizations
 #ifdef __CUDA_ARCH__
@@ -23,8 +24,9 @@ __device__ __constant__ u64 glv_beta[4];
 __device__ __constant__ u64 glv_lambda1[4];
 __device__ __constant__ u64 glv_lambda2[4];
 
-//imp2 table points for KernelA
-__device__ __constant__ u64 jmp2_table[8 * JMP_CNT];
+//imp2 table points for KernelA - split into two parts for T4
+__device__ __constant__ u64 jmp2_table_part1[4 * JMP_CNT];
+__device__ __constant__ u64 jmp2_table_part2[4 * JMP_CNT];
 
 
 #define BLOCK_CNT	gridDim.x

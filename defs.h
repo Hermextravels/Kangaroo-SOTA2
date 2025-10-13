@@ -35,7 +35,12 @@ struct CheckpointData {
 //must be divisible by MD_LEN
 #define STEP_CNT			1000
 
-#define JMP_CNT				1024  // Increased to support 4 jumps
+#define JMP_CNT				512  // Optimized for T4 constant memory
+
+// Memory management for T4
+#define JMP_TABLE_SPLIT    1
+#define JMP_BATCH_SIZE     256
+#define USE_SHARED_MEM_CACHE 1
 
 //use different options for cards older than RTX 40xx
 #ifdef __CUDA_ARCH__
