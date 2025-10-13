@@ -75,15 +75,15 @@ void SaveCheckpoint()
     cp.totalOps = TotalOps;
     cp.pntIndex = PntIndex;
     
-    // Store the start range
-    u64* startWords = gStart.GetWords();
-    memcpy(cp.currentStartWords, startWords, sizeof(u64) * 4);
+    // Store the start range - copy directly from EcInt's internal data
+    memcpy(cp.currentStartWords, gStart.GetWords(), sizeof(u64) * 4);
     
     FILE* f = fopen(gCheckpointFile, "wb");
     if (f) {
         fwrite(&cp, sizeof(CheckpointData), 1, f);
-        fwrite(pPntList, sizeof(u8), PntIndex * sizeof(DBRec), f);
+        fwrite(pPntList, 1, PntIndex * sizeof(DBRec), f);
         fclose(f);
+        printf("\nCheckpoint saved: %llu ops, %u points\n", cp.totalOps, cp.pntIndex);
     }
 }
 
@@ -91,14 +91,19 @@ bool LoadCheckpoint()
 {
     CheckpointData cp;
     FILE* f = fopen(gCheckpointFile, "rb");
-    if (!f) return false;
+    if (!f) {
+        printf("\nNo checkpoint file found\n");
+        return false;
+    }
     
     if (fread(&cp, sizeof(CheckpointData), 1, f) != 1) {
+        printf("\nError reading checkpoint header\n");
         fclose(f);
         return false;
     }
     
     if (cp.checkpointVersion != 1) {
+        printf("\nInvalid checkpoint version\n");
         fclose(f);
         return false;
     }
@@ -111,11 +116,13 @@ bool LoadCheckpoint()
     
     size_t bytesToRead = PntIndex * sizeof(DBRec);
     if (fread(pPntList, 1, bytesToRead, f) != bytesToRead) {
+        printf("\nError reading checkpoint data\n");
         fclose(f);
         return false;
     }
     
     fclose(f);
+    printf("\nCheckpoint loaded: %llu ops, %u points\n", TotalOps, PntIndex);
     return true;
 }
 

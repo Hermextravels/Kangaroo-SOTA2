@@ -45,6 +45,10 @@ public:
 	void RndBits(int nbits);
 	void RndMax(EcInt& max);
 
+	// Methods for checkpoint serialization
+	const u64* GetWords() const { return data; }
+	void SetWords(const u64* words) { memcpy(data, words, sizeof(u64) * 4); data[4] = 0; }
+
 	u64 data[4 + 1];
 };
 
