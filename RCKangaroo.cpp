@@ -678,6 +678,10 @@ int main(int argc, char* argv[])
 		EcInt DefaultStart; // The absolute start of the puzzle's range (2^134)
 		DefaultStart.SetHexStr("4000000000000000000000000000000000");
 
+		// *** FIX for subtraction error: define EcInt for value 1 ***
+		EcInt IntOne;
+		IntOne.Set(1);
+
 		EcInt CurrentStart;
 		
 		// **********************************************
@@ -733,14 +737,18 @@ int main(int argc, char* argv[])
 		// **********************************************
 		// START SUBRANGE SEARCH LOOP
 		// **********************************************
-		while (CurrentStart.IsLess(FullRangeEnd))
+		// FIX: Use IsLessThanU for comparison
+		while (CurrentStart.IsLessThanU(FullRangeEnd))
 		{
 			EcInt CurrentEnd = CurrentStart;
 			CurrentEnd.Add(RangeIncrement);
-			CurrentEnd.Sub(1); 
+			
+			// FIX: Subtract the EcInt 'IntOne'
+			CurrentEnd.Sub(IntOne); 
 			
 			// Clip the end if it exceeds the final range end.
-			if (CurrentEnd.IsGreater(FullRangeEnd))
+			// FIX: Check if (FullRangeEnd < CurrentEnd) which means (CurrentEnd > FullRangeEnd)
+			if (FullRangeEnd.IsLessThanU(CurrentEnd)) 
 			{
 				CurrentEnd = FullRangeEnd;
 			}
