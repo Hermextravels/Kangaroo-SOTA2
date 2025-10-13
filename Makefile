@@ -12,7 +12,7 @@ NVCCFLAGS := -O3 $(CUDA_ARCH) --use_fast_math -maxrregcount=255 -I$(CUDA_PATH)/i
 LDFLAGS := -L$(CUDA_PATH)/lib64 -L$(CUDA_PATH)/lib -lcudart -pthread
 
 CPU_SRC := RCKangaroo.cpp GpuKang.cpp Ec.cpp utils.cpp
-GPU_SRC := RCGpuCore.cu
+GPU_SRC := RCGpuCore.cu RCGpuCore_ecc.cu
 
 CPP_OBJECTS := $(CPU_SRC:.cpp=.o)
 CU_OBJECTS := $(GPU_SRC:.cu=.o)

@@ -22,52 +22,33 @@ __device__ void AddModP(u64* r, const u64* a, const u64* b);
 __device__ void SubModP(u64* r, const u64* a, const u64* b);
 __device__ void MulModP(u64* r, const u64* a, const u64* b);
 __device__ void NegModP(u64* a);
-__device__ void Copy_int4_x2(u64* dst, const u64* src);
+__device__ void InvModP(u32* r);
+__device__ void SqrModP(u64* r, const u64* a);
+__device__ void Add192to192(u64* r, const u64* a);
+__device__ void Sub192from192(u64* r, const u64* a);
 
-// GPU kernel macros
-#define THREAD_X threadIdx.x
-#define BLOCK_X  blockIdx.x
-#define BLOCK_CNT gridDim.x
+// Utility functions
+__device__ inline void Copy_int4_x2(u64* dst, const u64* src) {
+    *((int4*)&dst[0]) = *((int4*)&src[0]);
+    *((int4*)&dst[2]) = *((int4*)&src[2]);
+}
 
-// Forward declarations
-__device__ void AddModP(u64* r, const u64* a, const u64* b);
-__device__ void SubModP(u64* r, const u64* a, const u64* b);
-__device__ void MulModP(u64* r, const u64* a, const u64* b);
-__device__ void NegModP(u64* a);
-__device__ void Copy_int4_x2(u64* dst, const u64* src);
+__device__ inline void Copy_u64_x4(u64* dst, const u64* src) {
+    dst[0] = src[0];
+    dst[1] = src[1];
+    dst[2] = src[2];
+    dst[3] = src[3];
+}
 
-#ifndef JMP_CNT
-#define JMP_CNT 256
-#endif
+__device__ inline void st_cs_v4_b32(int4* dst, int4 src) {
+    *dst = src;
+}
 
-#ifndef BLOCK_SIZE
-#define BLOCK_SIZE 256
-#endif
-
-// Thread index helpers
-#define BLOCK_CNT   gridDim.x
-#define BLOCK_X     blockIdx.x
-#define THREAD_X    threadIdx.x
+// Include core CUDA device macros from defs.h
 
 // Memory operation helpers
 #define LOAD_VAL_256(dst, ptr, group) \
-    do { \
-        *((int4*)&(dst)[0]) = *((int4*)&(ptr)[BLOCK_SIZE * 4 * BLOCK_CNT * (group)]); \
-        *((int4*)&(dst)[2]) = *((int4*)&(ptr)[2 * BLOCK_SIZE + BLOCK_SIZE * 4 * BLOCK_CNT * (group)]); \
-    } while(0)
-
-#define SAVE_VAL_256(ptr, src, group) \
-    do { \
-        *((int4*)&(ptr)[BLOCK_SIZE * 4 * BLOCK_CNT * (group)]) = *((int4*)&(src)[0]); \
-        *((int4*)&(ptr)[2 * BLOCK_SIZE + BLOCK_SIZE * 4 * BLOCK_CNT * (group)]) = *((int4*)&(src)[2]); \
-    } while(0)
-
-
-#define BLOCK_CNT	gridDim.x
-#define BLOCK_X		blockIdx.x
-#define THREAD_X	threadIdx.x
-
-//coalescing
+// Memory coalescing helpers
 #define LOAD_VAL_256(dst, ptr, group) do { \
     *((int4*)&(dst)[0]) = *((int4*)&(ptr)[BLOCK_SIZE * 4 * BLOCK_CNT * (group)]); \
     *((int4*)&(dst)[2]) = *((int4*)&(ptr)[2 * BLOCK_SIZE + BLOCK_SIZE * 4 * BLOCK_CNT * (group)]); \
@@ -78,7 +59,7 @@ __device__ void Copy_int4_x2(u64* dst, const u64* src);
     *((int4*)&(ptr)[2 * BLOCK_SIZE + BLOCK_SIZE * 4 * BLOCK_CNT * (group)]) = *((int4*)&(src)[2]); \
 } while(0)
 
-
+// Shared memory
 extern __shared__ u64 LDS[]; 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -88,7 +69,7 @@ extern __shared__ u64 LDS[];
 //this kernel performs main jumps
 // T4 optimization: __launch_bounds__(512, 2) allows 2 blocks per SM for better occupancy
 extern "C" __global__ void __launch_bounds__(BLOCK_SIZE, 2)
-KernelRun(struct TKparams Kparams)
+KernelRun(struct KernelParams Kparams)
 {
     __shared__ u64 shared_mem[BLOCK_SIZE * 8];
     
@@ -100,45 +81,7 @@ KernelRun(struct TKparams Kparams)
     // Local storage
     u64 x[4], y[4], tmp[4], tmp2[4];
     u64 jmp_x[4], jmp_y[4];
-    
-    // Load jump tables to constant memory first
-    if (tid < JMP_CNT) {
-        int i = tid;
-        while (i < JMP_CNT) {
-            // Load all jump tables in parallel
-            *(int4*)&jmp1_table[8 * i + 0] = *(int4*)&Kparams.Jumps1[12 * i + 0];
-            *(int4*)&jmp1_table[8 * i + 4] = *(int4*)&Kparams.Jumps1[12 * i + 4];
-            
-            *(int4*)&jmp2_table[8 * i + 0] = *(int4*)&Kparams.Jumps2[12 * i + 0];
-            *(int4*)&jmp2_table[8 * i + 4] = *(int4*)&Kparams.Jumps2[12 * i + 4];
-            
-            *(int4*)&jmp3_table[8 * i + 0] = *(int4*)&Kparams.Jumps3[12 * i + 0];
-            *(int4*)&jmp3_table[8 * i + 4] = *(int4*)&Kparams.Jumps3[12 * i + 4];
-            
-            *(int4*)&jmp4_table[8 * i + 0] = *(int4*)&Kparams.Jumps4[12 * i + 0];
-            *(int4*)&jmp4_table[8 * i + 4] = *(int4*)&Kparams.Jumps4[12 * i + 4];
-            
-            i += BLOCK_SIZE;
-        }
-    }
-    __syncthreads();
-KernelRun(KernelParams Kparams)
-{
-    __shared__ u64 shared_mem[BLOCK_SIZE * 8];
-    
-    // Thread identification
-    const int tid = threadIdx.x;
-    const int bid = blockIdx.x;
-    const int gid = bid * BLOCK_SIZE + tid;
-    
-    // Local storage
-    u64 x[4], y[4], tmp[4], tmp2[4];
-    u64 jmp_x[4], jmp_y[4];
     u64 dp_mask = (Kparams.DP >= 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << Kparams.DP) - 1);
-    
-    // Local point storage
-    u64 x[4], y[4], tmp[4], tmp2[4];
-    u64 jmp_x[4], jmp_y[4];
     
     // Load jump tables to constant memory first
     if (tid < JMP_CNT) {
