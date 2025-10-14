@@ -251,8 +251,9 @@ void CheckNewPoints()
 				if (pref->type == TAME)
 					continue;
 
-				//if it's wild, we can find the key from the same type if distances are different
-				if (*(u64*)pref->d == *(u64*)nrec.d)
+				// if it's wild, we can find the key from the same type if distances are different.
+				// Compare the full packed 22-byte distance instead of only the first 8 bytes.
+				if (memcmp(pref->d, nrec.d, sizeof(nrec.d)) == 0)
 					continue;
 				//else
 				//	ToLog("key found by same wild");
