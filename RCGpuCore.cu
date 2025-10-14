@@ -2,13 +2,25 @@
 // (c) 2024, RetiredCoder (RC)
 // License: GPLv3, see "LICENSE.TXT" file
 // https://github.com/RetiredC
+// Copilot, rewrite this kernel to minimize global memory use,
+// use shared memory for jump tables,
+// and ensure coalesced access for all reads/writes.
+// Target architecture: sm_75 (Tesla T4).
+// Optimize for sustained throughput >1.5 GKeys/s with <4 GB VRAM.
 
 
 #include "defs.h"
 #include "RCGpuUtils.h"
 
-//imp2 table points for KernelA
+// imp2 table points for KernelA
 __device__ __constant__ u64 jmp2_table[8 * JMP_CNT];
+
+// If JMP_CNT is power of two, prefer mask to avoid modulo in hot loops
+#if ((JMP_CNT & (JMP_CNT - 1)) == 0)
+#define JMP_IDX(x0) ((u32)((x0) & (JMP_CNT - 1)))
+#else
+#define JMP_IDX(x0) ((u32)((x0) % JMP_CNT))
+#endif
 
 
 #define BLOCK_CNT	gridDim.x
@@ -30,18 +42,18 @@ extern __shared__ u64 LDS[];
 extern "C" __launch_bounds__(BLOCK_SIZE, 1)
 __global__ void KernelA(const TKparams Kparams)
 {
-	u64* L2x = Kparams.L2 + 2 * THREAD_X + 4 * BLOCK_SIZE * BLOCK_X;
-	u64* L2y = L2x + 4 * PNT_GROUP_CNT * BLOCK_CNT * BLOCK_SIZE;
-	u64* L2s = L2y + 4 * PNT_GROUP_CNT * BLOCK_CNT * BLOCK_SIZE;
+	u64* __restrict__ L2x = Kparams.L2 + 2 * THREAD_X + 4 * BLOCK_SIZE * BLOCK_X;
+	u64* __restrict__ L2y = L2x + 4 * PNT_GROUP_CNT * BLOCK_CNT * BLOCK_SIZE;
+	u64* __restrict__ L2s = L2y + 4 * PNT_GROUP_CNT * BLOCK_CNT * BLOCK_SIZE;
 	//list of distances of performed jumps for KernelB
-	int4* jlist = (int4*)(Kparams.JumpsList + (u64)BLOCK_X * STEP_CNT * PNT_GROUP_CNT * BLOCK_SIZE / 4);
+	int4* __restrict__ jlist = (int4*)(Kparams.JumpsList + (u64)BLOCK_X * STEP_CNT * PNT_GROUP_CNT * BLOCK_SIZE / 4);
 	jlist += (THREAD_X / 32) * 32 * PNT_GROUP_CNT / 8;
 	//list of last visited points for KernelC
-	u64* x_last0 = Kparams.LastPnts + 2 * THREAD_X + 4 * BLOCK_SIZE * BLOCK_X;
-	u64* y_last0 = x_last0 + 4 * PNT_GROUP_CNT * BLOCK_CNT * BLOCK_SIZE;
+	u64* __restrict__ x_last0 = Kparams.LastPnts + 2 * THREAD_X + 4 * BLOCK_SIZE * BLOCK_X;
+	u64* __restrict__ y_last0 = x_last0 + 4 * PNT_GROUP_CNT * BLOCK_CNT * BLOCK_SIZE;
       
-	u64* jmp1_table = LDS; //32KB
-	u16* lds_jlist = (u16*)&LDS[8 * JMP_CNT]; //4KB, must be aligned 16bytes
+	u64* __restrict__ jmp1_table = LDS; //32KB
+	u16* __restrict__ lds_jlist = (u16*)&LDS[8 * JMP_CNT]; //4-8KB, aligned
 
 	int i = THREAD_X;
 	while (i < JMP_CNT)
@@ -77,25 +89,26 @@ __global__ void KernelA(const TKparams Kparams)
 
 	u32 L1S2 = Kparams.L1S2[BLOCK_X * BLOCK_SIZE + THREAD_X];
 
-    for (int step_ind = 0; step_ind < STEP_CNT; step_ind++)
+	for (int step_ind = 0; step_ind < STEP_CNT; step_ind++)
     {
         __align__(16) u64 inverse[5];
-		u64* jmp_table;
+		u64* __restrict__ jmp_table;
 		__align__(16) u64 jmp_x[4];
 		__align__(16) u64 jmp_y[4];
 		
 		//first group
 		LOAD_VAL_256(x, L2x, 0);
-		jmp_ind = x[0] % JMP_CNT;
+		jmp_ind = JMP_IDX(x[0]);
 		jmp_table = ((L1S2 >> 0) & 1) ? jmp2_table : jmp1_table;
 		Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 		SubModP(inverse, x, jmp_x);
 		SAVE_VAL_256(L2s, inverse, 0);
 		//the rest
+		#pragma unroll
 		for (int group = 1; group < PNT_GROUP_CNT; group++)
 		{
 			LOAD_VAL_256(x, L2x, group);
-			jmp_ind = x[0] % JMP_CNT;
+			jmp_ind = JMP_IDX(x[0]);
 			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
 			Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 			SubModP(tmp, x, jmp_x);
@@ -105,7 +118,8 @@ __global__ void KernelA(const TKparams Kparams)
 
 		InvModP((u32*)inverse);
 
-        for (int group = PNT_GROUP_CNT - 1; group >= 0; group--)
+		#pragma unroll
+		for (int group = PNT_GROUP_CNT - 1; group >= 0; group--)
         {
             __align__(16) u64 x0[4];
             __align__(16) u64 y0[4];
@@ -113,7 +127,7 @@ __global__ void KernelA(const TKparams Kparams)
 
 			LOAD_VAL_256(x0, L2x, group);
             LOAD_VAL_256(y0, L2y, group);
-			jmp_ind = x0[0] % JMP_CNT;
+			jmp_ind = JMP_IDX(x0[0]);
 			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
 			Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 			Copy_int4_x2(jmp_y, jmp_table + 8 * jmp_ind + 4);
@@ -148,7 +162,7 @@ __global__ void KernelA(const TKparams Kparams)
 
 			if (((L1S2 >> group) & 1) == 0) //normal mode, check L1S2 loop
 			{
-				u32 jmp_next = x[0] % JMP_CNT;
+				u32 jmp_next = JMP_IDX(x[0]);
 				jmp_next |= ((u32)y[0] & 1) ? 0 : INV_FLAG; //inverted
 				L1S2 |= (jmp_ind == jmp_next) ? (1u << group) : 0; //loop L1S2 detected
 			}
@@ -190,6 +204,7 @@ __global__ void KernelA(const TKparams Kparams)
 	Kparams.L1S2[BLOCK_X * BLOCK_SIZE + THREAD_X] = L1S2;
 	//copy kangs from L2 to global
 	kang_ind = PNT_GROUP_CNT * (THREAD_X + BLOCK_X * BLOCK_SIZE);
+	#pragma unroll
 	for (u32 group = 0; group < PNT_GROUP_CNT; group++)
 	{
 		LOAD_VAL_256(tmp, L2x, group);
@@ -227,8 +242,8 @@ __global__ void KernelA(const TKparams Kparams)
 	u64* x_last0 = Kparams.LastPnts + 2 * THREAD_X + 4 * BLOCK_SIZE * BLOCK_X;
 	u64* y_last0 = x_last0 + 4 * PNT_GROUP_CNT * BLOCK_CNT * BLOCK_SIZE;
 
-	u64* jmp1_table = LDS; //32KB
-	u16* lds_jlist = (u16*)&LDS[8 * JMP_CNT]; //8KB, must be aligned 16bytes
+	u64* __restrict__ jmp1_table = LDS; //32KB
+	u16* __restrict__ lds_jlist = (u16*)&LDS[8 * JMP_CNT]; //8KB, aligned
 
 	int i = THREAD_X;
 	while (i < JMP_CNT)
@@ -264,15 +279,15 @@ __global__ void KernelA(const TKparams Kparams)
 	}
 
 	u64 L1S2 = ((u64*)Kparams.L1S2)[BLOCK_X * BLOCK_SIZE + THREAD_X];
-	u64* jmp_table;
+	u64* __restrict__ jmp_table;
 	__align__(16) u64 jmp_x[4];
 	__align__(16) u64 jmp_y[4];
 
 	//preparations (first calc for inv)
 	for (int group = 0; group < PNT_GROUP_CNT; group++)
 	{
-		LOAD_VAL_256_m(x, Lx, group);
-		jmp_ind = x[0] % JMP_CNT;
+	LOAD_VAL_256_m(x, Lx, group);
+	jmp_ind = JMP_IDX(x[0]);
 		jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
 		Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 		SubModP(tmp, x, jmp_x);
@@ -320,7 +335,7 @@ __global__ void KernelA(const TKparams Kparams)
 			}
 			LOAD_VAL_256_m(y0, Ly, group);
 
-			jmp_ind = x0[0] % JMP_CNT;
+		jmp_ind = JMP_IDX(x0[0]);
 			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
 			if (cached)
 			{
@@ -361,7 +376,7 @@ __global__ void KernelA(const TKparams Kparams)
 					LOAD_VAL_256_m(t_cache, Ls, (group + g_inc + g_inc) / 2);
 					cached = true;				
 					LOAD_VAL_256_m(x0_cache, Lx, group + g_inc);
-					u32 jmp_tmp = x0_cache[0] % JMP_CNT;
+					u32 jmp_tmp = JMP_IDX(x0_cache[0]);
 					__align__(16) u64 dx2[4];
 					u64* jmp_table_tmp = ((L1S2 >> (group + g_inc)) & 1) ? jmp2_table : jmp1_table;
 					Copy_int4_x2(jmpx_cached, jmp_table_tmp + 8 * jmp_tmp);
@@ -389,7 +404,7 @@ __global__ void KernelA(const TKparams Kparams)
 
 			if (((L1S2 >> group) & 1) == 0) //normal mode, check L1S2 loop
 			{
-				u32 jmp_next = x[0] % JMP_CNT;
+				u32 jmp_next = JMP_IDX(x[0]);
 				jmp_next |= ((u32)y[0] & 1) ? 0 : INV_FLAG; //inverted
 				L1S2 |= (jmp_ind == jmp_next) ? (1ull << group) : 0; //loop L1S2 detected
 			}
@@ -426,7 +441,7 @@ __global__ void KernelA(const TKparams Kparams)
 			}
 		
 			//preps to calc next inv
-			jmp_ind = x[0] % JMP_CNT;
+			jmp_ind = JMP_IDX(x[0]);
 			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
 			Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 			SubModP(dx, x, jmp_x);
@@ -519,17 +534,23 @@ __device__ __forceinline__ bool ProcessJumpDistance(u32 step_ind, u32 d_cur, u64
 	else
 		Add192to192(d, jmp);
 
-	//check in table
+	//check in table (avoid expensive modulo by MD_LEN)
 	int found_ind = iter + MD_LEN - 4;
 	while (1)
 	{
-		if (table[found_ind % MD_LEN] == d[0])
+		int idx = found_ind;
+		if (idx >= MD_LEN) idx -= MD_LEN; // initial range can be [6..15]
+		if (table[idx] == d[0])
 			break;
 		found_ind -= 2;
-		if (table[found_ind % MD_LEN] == d[0])
+		idx = found_ind;
+		if (idx >= MD_LEN) idx -= MD_LEN;
+		if (table[idx] == d[0])
 			break;
 		found_ind -= 2;
-		if (table[found_ind % MD_LEN] == d[0])
+		idx = found_ind;
+		if (idx >= MD_LEN) idx -= MD_LEN;
+		if (table[idx] == d[0])
 			break;
 		found_ind = iter;
 		if (table[found_ind] == d[0])
@@ -538,7 +559,11 @@ __device__ __forceinline__ bool ProcessJumpDistance(u32 step_ind, u32 d_cur, u64
 		break;
 	}
 	table[iter] = d[0];
-	*cur_ind = (iter + 1) % MD_LEN;
+	{
+		u32 next = (u32)iter + 1;
+		if (next == MD_LEN) next = 0;
+		*cur_ind = next;
+	}
 
 	if (found_ind < 0)
 	{		
@@ -547,7 +572,8 @@ __device__ __forceinline__ bool ProcessJumpDistance(u32 step_ind, u32 d_cur, u64
 		return false;
 	}
 
-	u32 LoopSize = (iter + MD_LEN - found_ind) % MD_LEN;
+	u32 LoopSize = (u32)iter + (u32)MD_LEN - (u32)found_ind;
+	if (LoopSize >= (u32)MD_LEN) LoopSize -= (u32)MD_LEN;
 	if (!LoopSize)
 		LoopSize = MD_LEN;
 	atomicAdd(Kparams.dbg_buf + LoopSize, 1); //dbg
@@ -582,8 +608,8 @@ __device__ __forceinline__ bool ProcessJumpDistance(u32 step_ind, u32 d_cur, u64
 extern "C" __launch_bounds__(BLOCK_SIZE, 1)
 __global__ void KernelB(const TKparams Kparams)
 {
-	u64* jmp1_d = LDS; //16KB, 192bit jumps
-	u64* jmp2_d = LDS + 4 * JMP_CNT; //16KB, 192bit jumps
+	u64* __restrict__ jmp1_d = LDS; //16KB, 192bit jumps
+	u64* __restrict__ jmp2_d = LDS + 4 * JMP_CNT; //16KB, 192bit jumps
 
 	int i = THREAD_X;
 	while (i < JMP_CNT)
@@ -598,7 +624,7 @@ __global__ void KernelB(const TKparams Kparams)
 		i += BLOCK_SIZE;
 	}
 
-	u32* jlist0 = (u32*)(Kparams.JumpsList + (u64)BLOCK_X * STEP_CNT * PNT_GROUP_CNT * BLOCK_SIZE / 4);
+	u32* __restrict__ jlist0 = (u32*)(Kparams.JumpsList + (u64)BLOCK_X * STEP_CNT * PNT_GROUP_CNT * BLOCK_SIZE / 4);
 
 	__syncthreads();
 
@@ -664,9 +690,11 @@ __global__ void KernelB(const TKparams Kparams)
 		#pragma unroll
 		for (int i = 0; i < MD_LEN; i++)
 		{
-			int ind = (i + MD_LEN - cur_indA) % MD_LEN;
+			int ind = i + MD_LEN - cur_indA;
+			if (ind >= MD_LEN) ind -= MD_LEN;
 			Kparams.LoopTable[MD_LEN * BLOCK_SIZE * PNT_GROUP_CNT * BLOCK_X + 2 * MD_LEN * BLOCK_SIZE * gr_ind2 + ind * BLOCK_SIZE + BLOCK_X] = RegsA[i];
-			ind = (i + MD_LEN - cur_indB) % MD_LEN;
+			ind = i + MD_LEN - cur_indB;
+			if (ind >= MD_LEN) ind -= MD_LEN;
 			Kparams.LoopTable[MD_LEN * BLOCK_SIZE * PNT_GROUP_CNT * BLOCK_X + 2 * MD_LEN * BLOCK_SIZE * gr_ind2 + (ind + MD_LEN) * BLOCK_SIZE + BLOCK_X] = RegsB[i];
 		}
 	}
@@ -676,7 +704,7 @@ __global__ void KernelB(const TKparams Kparams)
 extern "C" __launch_bounds__(BLOCK_SIZE, 1)
 __global__ void KernelC(const TKparams Kparams)
 {
-	u64* jmp3_table = LDS; //48KB
+	u64* __restrict__ jmp3_table = LDS; //48KB
 
 	int i = THREAD_X;
 	while (i < JMP_CNT)
@@ -721,7 +749,7 @@ __global__ void KernelC(const TKparams Kparams)
 		LOAD_VAL_256(x0, x_last, gr_ind);
 		LOAD_VAL_256(y0, y_last, gr_ind);
 
-		u32 jmp_ind = x0[0] % JMP_CNT;
+	u32 jmp_ind = JMP_IDX(x0[0]);
 		Copy_int4_x2(jmp_x, jmp3_table + 12 * jmp_ind);
 		Copy_int4_x2(jmp_y, jmp3_table + 12 * jmp_ind + 4);
 		SubModP(inverse, x0, jmp_x);
