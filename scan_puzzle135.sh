@@ -18,7 +18,11 @@ set -euo pipefail
 PUBKEY=${PUBKEY:-"02145d2611c823a396ef6712ce0f712f09b9b4f3135e3e0aa3230fb9b6d08d1e16"}
 BASE_START_HEX=${BASE_START_HEX:-"4000000000000000000000000000000000"}
 SPAN_BITS=${SPAN_BITS:-134}
-WIN_BITS=${WIN_BITS:-40}              # try 40 or 44
+WIN_BITS=${WIN_BITS:-40}              # default single window size (ignored if MULTI_WIN_BITS set)
+# Comma-separated list of window bit sizes to cycle or randomize through (e.g. "44,42,46,40").
+# Using multiple sizes slightly varies collision structure & DP emission; does not change fundamental odds
+MULTI_WIN_BITS=${MULTI_WIN_BITS:-""}
+WIN_CYCLE_MODE=${WIN_CYCLE_MODE:-roundrobin} # roundrobin|random
 N=${N:-200}                           # number of windows to generate
 SEED=${SEED:-"puzzle135_seed_v1"}     # change to vary sequence deterministically
 ALIGN=${ALIGN:-1}                     # 1=align window start to 2^WIN_BITS boundary; 0=no align
@@ -41,6 +45,15 @@ SKIP_DONE=${SKIP_DONE:-1}
 # Assumes throughput around THROUGHPUT_GS Gsteps/sec (set this if you know your speed)
 TARGET_SEC=${TARGET_SEC:-0}           # e.g., 900 for ~15 minutes; 0 disables auto MAX
 THROUGHPUT_GS=${THROUGHPUT_GS:-1.0}   # measured Gsteps/sec (Tesla T4 often ~0.9–1.1)
+MEM_CAP_MB=${MEM_CAP_MB:-3800}        # soft cap for DP tables (approx check)
+KANG_CNT_HINT=${KANG_CNT_HINT:-1310720} # override if solver prints different KangCnt
+ADAPTIVE_DP=${ADAPTIVE_DP:-1}         # 1=enable per-window adaptive DP/slots adjustments
+CLAMP_THRESHOLD=${CLAMP_THRESHOLD:-120} # events above this may trigger slot/DP change
+LOW_DP_COUNT_THRESHOLD=${LOW_DP_COUNT_THRESHOLD:-8000} # iteration DP count below this -> lower DP bits
+HIGH_DP_COUNT_THRESHOLD=${HIGH_DP_COUNT_THRESHOLD:-40000} # if above & no clamp may raise DP to reduce overhead
+MAX_DP_SLOTS=${MAX_DP_SLOTS:-16}
+MIN_DP=${MIN_DP:-12}
+MAX_DP=${MAX_DP_VAL:-22}
 
 mkdir -p "$LOG_DIR"
 
@@ -113,26 +126,43 @@ PY
   fi
 fi
 
-# Auto-tune DP/slots for the chosen window size, unless disabled
-if [[ "$DP_AUTO" -eq 1 ]]; then
+# Internal function: base heuristic (used at start or when changing window size)
+_base_dp_heuristic() {
+  local wb="$1"
+  local new_dp="$DP" new_slots="$DP_SLOTS" new_max="$MAX"
+  if [[ "$DP_AUTO" -eq 1 ]]; then
+    if [[ "$wb" =~ ^[0-9]+$ ]]; then
+      if   (( wb <= 40 )); then new_dp=16; new_slots=6;   [[ -z "${MAX_SET:-}" ]] && new_max=${MAX:-1.2};
+      elif (( wb <= 44 )); then new_dp=16; new_slots=10;  [[ -z "${MAX_SET:-}" ]] && new_max=${MAX:-1.1};
+      elif (( wb <= 50 )); then new_dp=20; new_slots=6;   [[ -z "${MAX_SET:-}" ]] && new_max=${MAX:-1.05};
+      else                     new_dp=22; new_slots=8;   [[ -z "${MAX_SET:-}" ]] && new_max=${MAX:-1.0};
+      fi
+    fi
+  fi
+  echo "$new_dp $new_slots $new_max"
+}
+
+# Initialize DP/slots for initial WIN_BITS (single mode) only if no multi list
+if [[ -z "$MULTI_WIN_BITS" ]]; then
+  if [[ "$DP_AUTO" -eq 1 ]]; then
+    read DP DP_SLOTS MAX < <(_base_dp_heuristic "$WIN_BITS")
+    echo "Auto-tuned parameters for WIN_BITS=$WIN_BITS -> DP=$DP, DP_SLOTS=$DP_SLOTS, MAX=$MAX"
+  fi
+else
+  IFS=',' read -r -a _WIN_LIST <<< "$MULTI_WIN_BITS"
+  echo "Multi window sizes enabled: ${_WIN_LIST[*]} (mode=$WIN_CYCLE_MODE)"
+fi
+
+# (legacy block kept for backward compatibility if user inspects script)
+if [[ -z "$MULTI_WIN_BITS" && "$DP_AUTO" -eq 1 ]]; then
   # Heuristic: for tiny windows, lower DP to emit enough DPs per kangaroo
   # and keep slots modest; for larger windows, raise DP to cut DP traffic.
-  case "$WIN_BITS" in
-    ''|*[!0-9]*) true ;; # leave defaults if WIN_BITS not numeric
-    *)
-      wb=$WIN_BITS
-      if   (( wb <= 40 )); then DP=16; DP_SLOTS=6; MAX=${MAX:-1.2};
-      elif (( wb <= 44 )); then DP=16; DP_SLOTS=10; MAX=${MAX:-1.1};
-      elif (( wb <= 50 )); then DP=20; DP_SLOTS=6; MAX=${MAX:-1.05};
-      else                       DP=22; DP_SLOTS=8; MAX=${MAX:-1.0};
-      fi
-      ;;
-  esac
-  echo "Auto-tuned parameters for WIN_BITS=$WIN_BITS -> DP=$DP, DP_SLOTS=$DP_SLOTS, MAX=$MAX"
+  : # already handled above, kept for clarity
 fi
 
 # --- iterate windows ---
 idx=0
+_win_index=0
 while IFS= read -r START_HEX; do
   idx=$((idx+1))
   [[ -z "$START_HEX" ]] && continue
@@ -142,8 +172,22 @@ while IFS= read -r START_HEX; do
     exit 0
   fi
 
-  # per-window log file
-  LOG="$LOG_DIR/w${WIN_BITS}_i${idx}_start_${START_HEX}.log"
+  # Determine active window bits (possibly cycling)
+  ACTIVE_WIN_BITS="$WIN_BITS"
+  if [[ -n "$MULTI_WIN_BITS" ]]; then
+    if [[ "$WIN_CYCLE_MODE" == "random" ]]; then
+      # shell-safe random pick
+      ACTIVE_WIN_BITS=${_WIN_LIST[$RANDOM % ${#_WIN_LIST[@]}]}
+    else
+      ACTIVE_WIN_BITS=${_WIN_LIST[$((_win_index % ${#_WIN_LIST[@]}))]}
+    fi
+    _win_index=$((_win_index+1))
+    # Recompute base heuristic if size changed
+    read DP DP_SLOTS MAX < <(_base_dp_heuristic "$ACTIVE_WIN_BITS")
+  fi
+
+  # per-window log file (include active bits for clarity)
+  LOG="$LOG_DIR/w${ACTIVE_WIN_BITS}_i${idx}_start_${START_HEX}.log"
 
   # Skip previously completed windows if requested
   if [[ "$SKIP_DONE" -eq 1 && -f "$LOG" ]] && grep -q "WINDOW_DONE" "$LOG" 2>/dev/null; then
@@ -195,12 +239,12 @@ PY
 
   # build command
   cmd=("$RCK_BIN" "-dp" "$DP" "-dp-slots" "$DP_SLOTS" "-resume" "-checkpoint-secs" "$CHECKPOINT_SECS" \
-       "-start" "$START_HEX" "-range" "$WIN_BITS" "-max" "$MAX" "-pubkey" "$PUBKEY")
+    "-start" "$START_HEX" "-range" "$ACTIVE_WIN_BITS" "-max" "$MAX" "-pubkey" "$PUBKEY")
   if [[ -n "$GPU" ]]; then
     cmd=("${cmd[@]}" "-gpu" "$GPU")
   fi
 
-  echo "[Window $idx] start=$START_HEX range=$WIN_BITS dp=$DP slots=$DP_SLOTS max=$MAX" | tee -a "$LOG"
+  echo "[Window $idx] start=$START_HEX range=$ACTIVE_WIN_BITS dp=$DP slots=$DP_SLOTS max=$MAX" | tee -a "$LOG"
   echo "Logging to: $LOG"
 
   if [[ "$TIMEOUT_SEC" -gt 0 ]]; then
@@ -223,6 +267,64 @@ PY
 
   # Mark window completion
   echo "WINDOW_DONE" >> "$LOG"
+
+  # Adaptive DP/slots tuning for next window (analyze tail metrics)
+  if [[ "$ADAPTIVE_DP" -eq 1 ]]; then
+    # Grab last iteration lines (avoid huge greps)
+    last_iter_line=$(grep -E "Iteration DP count=" "$LOG" | tail -n1 || true)
+    clamp_line=$(grep -E "DP clamped events" "$LOG" | tail -n1 || true)
+    if [[ -n "$last_iter_line" ]]; then
+      # Extract DP count and speed
+      dp_count=$(echo "$last_iter_line" | sed -E 's/.*Iteration DP count=([0-9]+).*/\1/')
+    else
+      dp_count=0
+    fi
+    if [[ -n "$clamp_line" ]]; then
+      clamp_events=$(echo "$clamp_line" | sed -E 's/.*events this iteration: ([0-9]+).*/\1/')
+    else
+      clamp_events=0
+    fi
+    adjust_msg=""
+
+    # Memory estimator before changes
+    current_mem_mb=$(( KANG_CNT_HINT * (DP_SLOTS * 16 + 4) / 1000000 ))
+
+    # If clamp events high -> try increasing slots first
+    if (( clamp_events > CLAMP_THRESHOLD )); then
+      if (( DP_SLOTS < MAX_DP_SLOTS )); then
+        DP_SLOTS=$((DP_SLOTS + 2))
+        adjust_msg+="clamp>${CLAMP_THRESHOLD}: +slots -> ${DP_SLOTS}; "
+      elif (( DP < MAX_DP )); then
+        DP=$((DP + 1))
+        adjust_msg+="clamp>${CLAMP_THRESHOLD}: +DP -> ${DP}; "
+      fi
+    else
+      # Low clamp pressure: maybe reduce DP if DP density too sparse
+      if (( dp_count < LOW_DP_COUNT_THRESHOLD && DP > MIN_DP )); then
+        DP=$((DP - 1))
+        adjust_msg+="lowDP<${LOW_DP_COUNT_THRESHOLD}: -DP -> ${DP}; "
+      elif (( dp_count > HIGH_DP_COUNT_THRESHOLD && DP < MAX_DP )); then
+        # plenty of DPs, can raise DP to trim overhead if not clamping
+        DP=$((DP + 1))
+        adjust_msg+="highDP>${HIGH_DP_COUNT_THRESHOLD}: +DP -> ${DP}; "
+      fi
+    fi
+
+    # Re-estimate memory; revert if exceeding cap
+    new_mem_mb=$(( KANG_CNT_HINT * (DP_SLOTS * 16 + 4) / 1000000 ))
+    if (( new_mem_mb > MEM_CAP_MB )); then
+      # revert slots change if that was the difference
+      if (( new_mem_mb > MEM_CAP_MB && DP_SLOTS > 2 )); then
+        DP_SLOTS=$((DP_SLOTS - 2))
+        new_mem_mb=$(( KANG_CNT_HINT * (DP_SLOTS * 16 + 4) / 1000000 ))
+        adjust_msg+="memCap: revert slots -> ${DP_SLOTS}; "
+      fi
+    fi
+
+    if [[ -n "$adjust_msg" ]]; then
+      echo "ADAPT_NEXT Window=$((idx+1)) dp=$DP slots=$DP_SLOTS estMem=${new_mem_mb}MB (${adjust_msg})" | tee -a "$LOG_DIR/scan_summary.log"
+    fi
+  fi
 
 done < "$STARTS_FILE"
 
