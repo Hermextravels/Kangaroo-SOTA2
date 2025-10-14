@@ -57,10 +57,10 @@ u64 GetTickCount64()
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #define DB_REC_LEN			32
-// Use full stored record (32 bytes) for ordering and equality checks to avoid
-// false-positive matches that manifest as frequent "Collision Error" events.
-// Previously this was 9, which is fast but too collision-prone at scale.
-#define DB_FIND_LEN			32
+// Compare only the 9 stored bytes of X-suffix for ordering/equality.
+// Together with the 3-byte header prefix (not stored), this yields 12 bytes of X
+// for exact DP matching, while allowing different distances to collide correctly.
+#define DB_FIND_LEN			9
 #define DB_MIN_GROW_CNT		2
 
 //we need advanced memory management to reduce memory fragmentation
