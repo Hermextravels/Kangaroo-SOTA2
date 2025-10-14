@@ -36,6 +36,7 @@ GPU=${GPU:-""}                        # e.g. "0" to pin GPU 0; empty = auto
 CHECKPOINT_SECS=${CHECKPOINT_SECS:-300}
 RCK_BIN=${RCK_BIN:-"./rckangaroo"}
 LOG_DIR=${LOG_DIR:-"logs135"}
+LEDGER_FILE=${LEDGER_FILE:-"$LOG_DIR/ledger.csv"}  # CSV summary of windows
 LIST_FILE=${LIST_FILE:-""}           # if provided, read starts from this file instead of generating
 STOP_FILE=${STOP_FILE:-"STOP_SCAN"}   # create this file to stop between windows
 TIMEOUT_SEC=${TIMEOUT_SEC:-0}         # optional per-window wall time cap; 0=disabled
@@ -54,8 +55,14 @@ HIGH_DP_COUNT_THRESHOLD=${HIGH_DP_COUNT_THRESHOLD:-40000} # if above & no clamp 
 MAX_DP_SLOTS=${MAX_DP_SLOTS:-16}
 MIN_DP=${MIN_DP:-12}
 MAX_DP=${MAX_DP_VAL:-22}
+COLLISION_THRESHOLD=${COLLISION_THRESHOLD:-25}  # if Collision Error lines in a window exceed this, raise DP (rarer DPs)
 
 mkdir -p "$LOG_DIR"
+
+# Initialize ledger header if not present
+if [[ ! -f "$LEDGER_FILE" ]]; then
+  echo "timestamp,window_index,win_bits,start_hex,dp,dp_slots,max,dp_count,clamp_events,collision_count,last_speed_mkeys_s,duration_sec" > "$LEDGER_FILE"
+fi
 
 if [[ ! -x "$RCK_BIN" ]]; then
   echo "Error: rckangaroo binary not found: $RCK_BIN" >&2
@@ -247,6 +254,8 @@ PY
   echo "[Window $idx] start=$START_HEX range=$ACTIVE_WIN_BITS dp=$DP slots=$DP_SLOTS max=$MAX" | tee -a "$LOG"
   echo "Logging to: $LOG"
 
+  window_t0=$(date +%s)
+
   if [[ "$TIMEOUT_SEC" -gt 0 ]]; then
     # Use timeout if available; otherwise run normally
     if command -v timeout >/dev/null 2>&1; then
@@ -324,7 +333,51 @@ PY
     if [[ -n "$adjust_msg" ]]; then
       echo "ADAPT_NEXT Window=$((idx+1)) dp=$DP slots=$DP_SLOTS estMem=${new_mem_mb}MB (${adjust_msg})" | tee -a "$LOG_DIR/scan_summary.log"
     fi
+
+    # Secondary adaptation: Collision Error frequency
+    collision_count=$(grep -c "Collision Error" "$LOG" || true)
+    if (( collision_count > COLLISION_THRESHOLD )); then
+      if (( DP < MAX_DP )); then
+        old_dp=$DP
+        # Escalate by 1 (or 2 if extremely high)
+        if (( collision_count > COLLISION_THRESHOLD * 3 && DP + 2 <= MAX_DP )); then
+          DP=$((DP+2))
+          bump=2
+        else
+          DP=$((DP+1))
+          bump=1
+        fi
+        # Optionally shrink slots slightly to free memory (keep >=4)
+        if (( DP_SLOTS > 6 )); then
+          DP_SLOTS=$((DP_SLOTS-2))
+        fi
+        new_mem_mb=$(( KANG_CNT_HINT * (DP_SLOTS * 16 + 4) / 1000000 ))
+        echo "ADAPT_NEXT Window=$((idx+1)) dp=$DP slots=$DP_SLOTS estMem=${new_mem_mb}MB (collisionCount=${collision_count}: +${bump} DP, slots adjust)" | tee -a "$LOG_DIR/scan_summary.log"
+      else
+        echo "ADAPT_NEXT Window=$((idx+1)) dp=$DP slots=$DP_SLOTS (collisionCount=${collision_count}: at MAX_DP, no change)" | tee -a "$LOG_DIR/scan_summary.log"
+      fi
+    fi
   fi
+
+  # --- Ledger collection (independent of adaptive logic) ---
+  # Gather metrics from this window's log and append one CSV row.
+  last_iter_line=$(grep -E "Iteration DP count=" "$LOG" | tail -n1 || true)
+  last_speed="" dp_count_val="" clamp_events_val="" collision_count_val=""
+  if [[ -n "$last_iter_line" ]]; then
+    dp_count_val=$(echo "$last_iter_line" | sed -E 's/.*Iteration DP count=([0-9]+).*/\1/')
+    last_speed=$(echo "$last_iter_line" | sed -E 's/.*speed=([0-9]+) MKeys\/s.*/\1/')
+  fi
+  clamp_events_line=$(grep -E "DP clamped events" "$LOG" | tail -n1 || true)
+  if [[ -n "$clamp_events_line" ]]; then
+    clamp_events_val=$(echo "$clamp_events_line" | sed -E 's/.*events this iteration: ([0-9]+).*/\1/')
+  else
+    clamp_events_val=0
+  fi
+  collision_count_val=$(grep -c "Collision Error" "$LOG" || true)
+  window_t1=$(date +%s)
+  duration=$((window_t1-window_t0))
+  ts_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  echo "$ts_iso,$idx,$ACTIVE_WIN_BITS,$START_HEX,$DP,$DP_SLOTS,$MAX,${dp_count_val:-0},${clamp_events_val:-0},${collision_count_val:-0},${last_speed:-0},$duration" >> "$LEDGER_FILE"
 
 done < "$STARTS_FILE"
 
