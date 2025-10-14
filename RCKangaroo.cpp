@@ -55,6 +55,9 @@ double gMax;
 bool gGenMode; //tames generation mode
 bool gIsOpsLimit;
 u32 gDPTableSlotsOverride = 0; // 0 = auto, otherwise override slots per kangaroo
+bool gDPAuto = false; // auto-select DP bits based on memory and range
+u32 gMemCapMB = 3800; // target DP table memory cap in MB (default ~3.8GB)
+u32 gSplitRangeN = 0; // optional: generate N subranges and exit
 
 // Checkpointing: host buffer for all kangaroo states
 u8* pKangsState = NULL;
@@ -116,6 +119,14 @@ void InitGpus()
 		}
 
 		cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+
+		// Report free/total memory on this GPU
+		size_t freeB = 0, totalB = 0;
+		if (cudaMemGetInfo(&freeB, &totalB) == cudaSuccess)
+		{
+			printf("GPU %d memory: free %.2f GiB / total %.2f GiB\r\n", i,
+				(double)freeB / (1024.0 * 1024.0 * 1024.0), (double)totalB / (1024.0 * 1024.0 * 1024.0));
+		}
 
 		GpuKangs[GpuCnt] = new RCGpuKang();
 		GpuKangs[GpuCnt]->CudaIndex = i;
@@ -398,6 +409,68 @@ void ShowStats(u64 tm_start, double exp_ops, double dp_val)
 	printf("%sSpeed: %d MKeys/s, Err: %d, DPs: %lluK/%lluK, Time: %llud:%02dh:%02dm/%llud:%02dh:%02dm\r\n", gGenMode ? "GEN: " : (IsBench ? "BENCH: " : "MAIN: "), speed, gTotalErrors, db.GetBlockCnt()/1000, est_dps_cnt/1000, days, hours, min, exp_days, exp_hours, exp_min);
 }
 
+// Compute an auto DP value (and optionally DP slots) based on available memory and desired cap.
+// We do this at host side before Prepare() so all GPUs use a consistent DP and fit in the cap.
+// Heuristic: choose DP bits such that expected DPs per kangaroo per iteration is small (<= ~2),
+// and choose slots 6..12 that fit within the DP memory cap across GPUs. If the cap is tight, raise DP.
+static void AutoSelectDPAndSlots(int& outDP, u32& outSlots)
+{
+	// Estimate OPS ~ 1.15 * 2^(range/2)
+	double ops = 1.15 * pow(2.0, gRange / 2.0);
+	// Aggregate worst-case across GPUs for KangCnt and free memory
+	u64 minFree = (u64)-1;
+	int maxKang = 0;
+	for (int i = 0; i < GpuCnt; i++)
+	{
+		int blockCnt = GpuKangs[i]->mpCnt;
+		int blockSize = GpuKangs[i]->IsOldGpu ? 512 : 256;
+		int groupCnt = GpuKangs[i]->IsOldGpu ? 64 : 24;
+		int kangCnt = blockCnt * blockSize * groupCnt;
+		if (kangCnt > maxKang) maxKang = kangCnt;
+		// query free mem on this GPU
+		size_t freeB = 0, totalB = 0;
+		cudaSetDevice(GpuKangs[i]->CudaIndex);
+		if (cudaMemGetInfo(&freeB, &totalB) == cudaSuccess)
+		{
+			if ((u64)freeB < minFree) minFree = (u64)freeB;
+		}
+	}
+	if (maxKang <= 0) { outDP = 20; outSlots = 8; return; }
+	// Budget for DP table in bytes: min(user cap, actual free - safety)
+	u64 capB = (u64)gMemCapMB * 1024ull * 1024ull;
+	if (minFree != (u64)-1)
+	{
+		u64 safeFree = (minFree > 512ull * 1024ull * 1024ull) ? (minFree - 512ull * 1024ull * 1024ull) : (minFree / 2);
+		if (capB > safeFree) capB = safeFree;
+	}
+
+	// Try DP bits from 16..40: higher DP -> fewer DPs emitted. Choose slots 4..16 to fit cap.
+	int bestDP = 22; u32 bestSlots = 8;
+	for (int dp = 16; dp <= 40; dp++)
+	{
+		double dp_val = (double)(1ull << dp);
+		double path_per_kang = ops / (double)maxKang;
+		double dps_per_kang = path_per_kang / dp_val;
+		// desired slots  = small multiple of expected per-kang DPs
+		u32 slots = (u32)std::max(4.0, std::min(16.0, floor(dps_per_kang * 4.0) + 6.0));
+		// Estimate DP table bytes = KangCnt * (16 * slots + sizeof(u32))
+		u64 bytes = (u64)maxKang * (16ull * (u64)slots + sizeof(u32));
+		if (bytes <= capB)
+		{
+			bestDP = dp; bestSlots = slots;
+			// Prefer lower DP (more DPs) until memory cap would be exceeded; break when we hit ~2 DPs per kang
+			if (dps_per_kang <= 2.0) break;
+		}
+		else
+		{
+			// If memory cap is exceeded, raise DP further
+			continue;
+		}
+	}
+	outDP = std::max(20, std::min(40, bestDP));
+	outSlots = std::max(4u, std::min(16u, bestSlots));
+}
+
 bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 {
 	if ((Range < 32) || (Range > 180))
@@ -579,8 +652,8 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 			tm_stats = GetTickCount64();
 		}
 
-		// Periodic checkpointing (only in generation mode)
-		if (gGenMode && pKangsState)
+		// Periodic checkpointing (enabled when resume is requested or in gen mode)
+		if ((gGenMode || gUseResume) && pKangsState)
 		{
 			u64 current_time = GetTickCount64();
 			if ((current_time - last_checkpoint_time) > ((u64)gCheckpointIntervalSecs * 1000ull))
@@ -762,6 +835,32 @@ bool ParseCommandLine(int argc, char* argv[])
 			return false;
 		}
 	}
+	else
+	if (strcmp(argument, "-dp-auto") == 0)
+	{
+		gDPAuto = true;
+	}
+	else
+	if (strcmp(argument, "-autotune") == 0)
+	{
+		gDPAuto = true; // alias
+	}
+	else
+	if (strcmp(argument, "-mem-cap-mb") == 0)
+	{
+	else
+	if (strcmp(argument, "-split-range") == 0)
+	{
+		int val = atoi(argv[ci]);
+		ci++;
+		if (val < 1 || val > 1000000) { printf("error: invalid value for -split-range option (1..1000000)\r\n"); return false; }
+		gSplitRangeN = (u32)val;
+	}
+		int val = atoi(argv[ci]);
+		ci++;
+		if (val < 512 || val > 15000) { printf("error: invalid value for -mem-cap-mb option (512..15000)\r\n"); return false; }
+		gMemCapMB = (u32)val;
+	}
 	if (!gPubKey.x.IsZero())
 		if (!gStartSet || !gRange || !gDP)
 		{
@@ -817,10 +916,61 @@ int main(int argc, char* argv[])
 
 	InitGpus();
 
+	// If user requested subrange splitting, emit N subranges and exit
+	if (gSplitRangeN > 0 && !IsBench)
+	{
+		if (!gStartSet || !gRange)
+		{
+			printf("error: -split-range requires -start and -range\r\n");
+			return 0;
+		}
+		// Compute aligned subranges
+		EcInt cur = gStart; EcInt one; one.SetU32(1);
+		u32 bits = gRange;
+		u32 win = bits / gSplitRangeN ? (bits / gSplitRangeN) : bits; // naive split; prefer rounding to >=32
+		if (win < 32) win = 32;
+		printf("Split %u into windows of %u bits (approx).\r\n", bits, win);
+		for (u32 i = 0; i < gSplitRangeN; i++)
+		{
+			// start_i = base + i * 2^win
+			EcInt off; off.SetU32(0);
+			EcInt step; step.SetU32(0);
+			// (We don’t have big-int shift helpers here; just print i and win so a wrapper can compute starts.)
+			printf("window %u: i=%u, win_bits=%u\r\n", i + 1, i, win);
+		}
+		return 0;
+	}
+
 	if (!GpuCnt)
 	{
 		printf("No supported GPUs detected, exit\r\n");
 		return 0;
+	}
+
+	// Global DP auto-selection before GPU Prepare
+	if (!IsBench && gDPAuto)
+	{
+		int autoDP; u32 autoSlots;
+		AutoSelectDPAndSlots(autoDP, autoSlots);
+		if (gDP == 0) gDP = autoDP; else gDP = std::max(gDP, (u32)autoDP);
+		if (gDPTableSlotsOverride == 0) gDPTableSlotsOverride = autoSlots;
+		// estimate memory footprint with worst-case KangCnt across GPUs
+		int maxKang = 0;
+		for (int i = 0; i < GpuCnt; i++)
+		{
+			int blockCnt = GpuKangs[i]->mpCnt;
+			int blockSize = GpuKangs[i]->IsOldGpu ? 512 : 256;
+			int groupCnt = GpuKangs[i]->IsOldGpu ? 64 : 24;
+			int kangCnt = blockCnt * blockSize * groupCnt;
+			if (kangCnt > maxKang) maxKang = kangCnt;
+		}
+		u64 dpBytes = (u64)maxKang * (16ull * (u64)gDPTableSlotsOverride + sizeof(u32));
+		double dpGiB = ((double)dpBytes) / (1024.0 * 1024.0 * 1024.0);
+		double ops = 1.15 * pow(2.0, gRange / 2.0);
+		double dpsPerKang = (ops / (double)maxKang) / (double)(1ull << gDP);
+		printf("Auto DP: DP=%u, slots/kang=%u, est DP memory: %.3f GiB per GPU, est DPs/kang ~ %.4f\r\n", gDP, gDPTableSlotsOverride, dpGiB, dpsPerKang);
+		if (dpsPerKang < 0.05)
+			printf("Note: very sparse DPs per kangaroo; consider lowering DP by 1–2 for better observability if memory allows.\r\n");
 	}
 
 	// Note: resume/load will be attempted after GPU Prepare (device memory allocation)

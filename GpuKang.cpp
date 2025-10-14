@@ -536,6 +536,7 @@ void RCGpuKang::Execute()
 		if (!tm)
 			tm = 1;
 		int cur_speed = (int)(pnt_cnt / (tm * 1000));
+		printf("GPU %d: Iteration DP count=%d, speed=%d MKeys/s\n", CudaIndex, cnt, cur_speed);
 		//printf("GPU %d kernel time %d ms, speed %d MH\r\n", CudaIndex, (int)tm, cur_speed);
 
 		SpeedStats[cur_stats_ind] = cur_speed;
