@@ -3,37 +3,11 @@
 // License: GPLv3, see "LICENSE.TXT" file
 // https://github.com/RetiredC
 
+
 #include "defs.h"
 #include "Ec.h"
 #include <random>
 #include "utils.h"
-
-// Add for collision logic
-void EcInt::Add(const EcInt& val) {
-	AddModP(const_cast<EcInt&>(val));
-}
-
-void EcInt::Subtract(const EcInt& val) {
-	SubModP(const_cast<EcInt&>(val));
-}
-
-void EcInt::Negate() {
-	NegModP();
-}
-// Add for collision logic
-void EcPoint::Multiply(const EcInt& val) {
-	// Replace with actual scalar multiplication
-	*this = Ec::MultiplyG(const_cast<EcInt&>(val));
-}
-
-void EcPoint::Negate() {
-	// Negate y coordinate (y = -y mod p)
-	y.NegModP();
-}
-
-bool EcPoint::Equals(const EcPoint& pnt) const {
-	return x.IsEqual(pnt.x) && y.IsEqual(pnt.y);
-}
 
 // https://en.bitcoin.it/wiki/Secp256k1
 EcInt g_P; //FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFE FFFFFC2F
@@ -469,7 +443,7 @@ bool EcInt::IsLessThanI(EcInt& val)
 	return data[i] < val.data[i];
 }
 
-bool EcInt::IsEqual(const EcInt& val) const
+bool EcInt::IsEqual(EcInt& val)
 {
 	return memcmp(val.data, this->data, 40) == 0;
 }
@@ -556,7 +530,8 @@ void EcInt::MulModP(EcInt& val)
 	c = _addcarry_u64(c, buff[1], h, data + 1);
 	c = _addcarry_u64(c, 0, buff[2], data + 2);
 	data[4] = _addcarry_u64(c, buff[3], 0, data + 3);
-	while (data[4])
+	// ensure reduced modulo P: loop until value < P (previous code checked only top limb)
+	while (!IsLessThanU(g_P))
 		Sub(g_P);
 }
 

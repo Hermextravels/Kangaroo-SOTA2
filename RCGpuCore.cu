@@ -6,27 +6,9 @@
 
 #include "defs.h"
 #include "RCGpuUtils.h"
-#include "gpu_config.h"
-#include "memory_management.cuh"
 
-// T4-specific optimizations
-#ifdef __CUDA_ARCH__
-    #if __CUDA_ARCH__ >= 750
-        #pragma push
-        #pragma optimize(5)
-        #define USE_T4_OPTIMIZATIONS
-    #endif
-#endif
-#include "kangaroo_optimizations.h"
-
-// GLV endomorphism constants
-__device__ __constant__ u64 glv_beta[4];
-__device__ __constant__ u64 glv_lambda1[4];
-__device__ __constant__ u64 glv_lambda2[4];
-
-//imp2 table points for KernelA - split into two parts for T4
-__device__ __constant__ u64 jmp2_table_part1[4 * JMP_CNT];
-__device__ __constant__ u64 jmp2_table_part2[4 * JMP_CNT];
+//imp2 table points for KernelA
+__device__ __constant__ u64 jmp2_table[8 * JMP_CNT];
 
 
 #define BLOCK_CNT	gridDim.x
@@ -44,7 +26,7 @@ extern __shared__ u64 LDS[];
 
 #ifndef OLD_GPU
 
-//this kernel performs main jumps with GLV and batch optimizations
+//this kernel performs main jumps
 extern "C" __launch_bounds__(BLOCK_SIZE, 1)
 __global__ void KernelA(const TKparams Kparams)
 {
@@ -77,34 +59,20 @@ __global__ void KernelA(const TKparams Kparams)
 	u64 dp_mask64 = ~((1ull << (64 - Kparams.DP)) - 1);
 	u16 jmp_ind;
 
-	//copy kangs from global to L2 (now 4 kangaroos)
+	//copy kangs from global to L2
 	u32 kang_ind = PNT_GROUP_CNT * (THREAD_X + BLOCK_X * BLOCK_SIZE);
 	for (u32 group = 0; group < PNT_GROUP_CNT; group++)
-	{
-		// Tame1
-		tmp[0] = Kparams.Kangs[(kang_ind + group) * 16 + 0];
-		tmp[1] = Kparams.Kangs[(kang_ind + group) * 16 + 1];
-		tmp[2] = Kparams.Kangs[(kang_ind + group) * 16 + 2];
-		tmp[3] = Kparams.Kangs[(kang_ind + group) * 16 + 3];
+	{	
+		tmp[0] = Kparams.Kangs[(kang_ind + group) * 12 + 0];
+		tmp[1] = Kparams.Kangs[(kang_ind + group) * 12 + 1];
+		tmp[2] = Kparams.Kangs[(kang_ind + group) * 12 + 2];
+		tmp[3] = Kparams.Kangs[(kang_ind + group) * 12 + 3];
 		SAVE_VAL_256(L2x, tmp, group);
-		// Tame2
-		tmp[0] = Kparams.Kangs[(kang_ind + group) * 16 + 4];
-		tmp[1] = Kparams.Kangs[(kang_ind + group) * 16 + 5];
-		tmp[2] = Kparams.Kangs[(kang_ind + group) * 16 + 6];
-		tmp[3] = Kparams.Kangs[(kang_ind + group) * 16 + 7];
+		tmp[0] = Kparams.Kangs[(kang_ind + group) * 12 + 4];
+		tmp[1] = Kparams.Kangs[(kang_ind + group) * 12 + 5];
+		tmp[2] = Kparams.Kangs[(kang_ind + group) * 12 + 6];
+		tmp[3] = Kparams.Kangs[(kang_ind + group) * 12 + 7];
 		SAVE_VAL_256(L2y, tmp, group);
-		// Wild1
-		tmp[0] = Kparams.Kangs[(kang_ind + group) * 16 + 8];
-		tmp[1] = Kparams.Kangs[(kang_ind + group) * 16 + 9];
-		tmp[2] = Kparams.Kangs[(kang_ind + group) * 16 + 10];
-		tmp[3] = Kparams.Kangs[(kang_ind + group) * 16 + 11];
-		SAVE_VAL_256(L2s, tmp, group);
-		// Wild2
-		tmp[0] = Kparams.Kangs[(kang_ind + group) * 16 + 12];
-		tmp[1] = Kparams.Kangs[(kang_ind + group) * 16 + 13];
-		tmp[2] = Kparams.Kangs[(kang_ind + group) * 16 + 14];
-		tmp[3] = Kparams.Kangs[(kang_ind + group) * 16 + 15];
-		SAVE_VAL_256(L2s, tmp, group + PNT_GROUP_CNT); // store wild2 after wild1
 	}
 
 	u32 L1S2 = Kparams.L1S2[BLOCK_X * BLOCK_SIZE + THREAD_X];
@@ -119,8 +87,7 @@ __global__ void KernelA(const TKparams Kparams)
 		//first group
 		LOAD_VAL_256(x, L2x, 0);
 		jmp_ind = x[0] % JMP_CNT;
-		// Use split jump tables for T4
-		jmp_table = ((L1S2 >> 0) & 1) ? jmp2_table_part1 : jmp1_table;
+		jmp_table = ((L1S2 >> 0) & 1) ? jmp2_table : jmp1_table;
 		Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 		SubModP(inverse, x, jmp_x);
 		SAVE_VAL_256(L2s, inverse, 0);
@@ -129,7 +96,7 @@ __global__ void KernelA(const TKparams Kparams)
 		{
 			LOAD_VAL_256(x, L2x, group);
 			jmp_ind = x[0] % JMP_CNT;
-			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table_part1 : jmp1_table;
+			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
 			Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 			SubModP(tmp, x, jmp_x);
 			MulModP(inverse, inverse, tmp);
@@ -147,7 +114,7 @@ __global__ void KernelA(const TKparams Kparams)
 			LOAD_VAL_256(x0, L2x, group);
             LOAD_VAL_256(y0, L2y, group);
 			jmp_ind = x0[0] % JMP_CNT;
-			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table_part1 : jmp1_table;
+			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
 			Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 			Copy_int4_x2(jmp_y, jmp_table + 8 * jmp_ind + 4);
 			u32 inv_flag = (u32)y0[0] & 1;
@@ -198,8 +165,6 @@ __global__ void KernelA(const TKparams Kparams)
 				ind = min(ind, DPTABLE_MAX_CNT - 1);
 				int4* dst = (int4*)(Kparams.DPTable + Kparams.KangCnt + (kang_ind * DPTABLE_MAX_CNT + ind) * 4);
 				dst[0] = ((int4*)x)[0];
-				// Set DP type explicitly: 0=TAME, 1=TAME2, 2=WILD1, 3=WILD2
-				dst[2].x = group; // store kangaroo type in DP buffer
 				jmp_ind |= DP_FLAG;
 			}
 
@@ -305,7 +270,7 @@ __global__ void KernelA(const TKparams Kparams)
 	{
 		LOAD_VAL_256_m(x, Lx, group);
 		jmp_ind = x[0] % JMP_CNT;
-	jmp_table = ((L1S2 >> group) & 1) ? jmp2_table_part1 : jmp1_table;
+		jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
 		Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 		SubModP(tmp, x, jmp_x);
 		if (group == 0)
@@ -353,7 +318,7 @@ __global__ void KernelA(const TKparams Kparams)
 			LOAD_VAL_256_m(y0, Ly, group);
 
 			jmp_ind = x0[0] % JMP_CNT;
-		jmp_table = ((L1S2 >> group) & 1) ? jmp2_table_part1 : jmp1_table;
+			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
 			if (cached)
 			{
 				Copy_u64_x4(jmp_x, jmpx_cached); 
@@ -395,7 +360,7 @@ __global__ void KernelA(const TKparams Kparams)
 					LOAD_VAL_256_m(x0_cache, Lx, group + g_inc);
 					u32 jmp_tmp = x0_cache[0] % JMP_CNT;
 					__align__(16) u64 dx2[4];
-				u64* jmp_table_tmp = ((L1S2 >> (group + g_inc)) & 1) ? jmp2_table_part1 : jmp1_table;
+					u64* jmp_table_tmp = ((L1S2 >> (group + g_inc)) & 1) ? jmp2_table : jmp1_table;
 					Copy_int4_x2(jmpx_cached, jmp_table_tmp + 8 * jmp_tmp);
 					SubModP(dx2, x0_cache, jmpx_cached);
 					MulModP(tmp, t_cache, dx2); //t = s(-1)
@@ -456,7 +421,7 @@ __global__ void KernelA(const TKparams Kparams)
 		
 			//preps to calc next inv
 			jmp_ind = x[0] % JMP_CNT;
-		jmp_table = ((L1S2 >> group) & 1) ? jmp2_table_part1 : jmp1_table;
+			jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
 			Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind);
 			SubModP(dx, x, jmp_x);
 			if (group == g_beg)
@@ -945,11 +910,7 @@ cudaError_t cuSetGpuParams(TKparams Kparams, u64* _jmp2_table)
 	err = cudaFuncSetAttribute(KernelC, cudaFuncAttributeMaxDynamicSharedMemorySize, Kparams.KernelC_LDS_Size);
 	if (err != cudaSuccess)
 		return err;
-	// Copy to both split tables
-	err = cudaMemcpyToSymbol(jmp2_table_part1, _jmp2_table, JMP_CNT * 32); // first half
-	if (err != cudaSuccess)
-		return err;
-	err = cudaMemcpyToSymbol(jmp2_table_part2, _jmp2_table + (JMP_CNT * 4), JMP_CNT * 32); // second half
+	err = cudaMemcpyToSymbol(jmp2_table, _jmp2_table, JMP_CNT * 64);
 	if (err != cudaSuccess)
 		return err;
 	return cudaSuccess;

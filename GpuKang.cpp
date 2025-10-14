@@ -5,12 +5,8 @@
 
 
 #include <iostream>
-#ifdef NO_CUDA
-#include "cuda_stub.h"
-#else
 #include "cuda_runtime.h"
 #include "cuda.h"
-#endif
 
 #include "GpuKang.h"
 
@@ -29,7 +25,7 @@ int RCGpuKang::CalcKangCnt()
 }
 
 //executes in main thread
-bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJumps1, EcJMP* _EcJumps2, EcJMP* _EcJumps3, EcJMP* _EcJumps4)
+bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJumps1, EcJMP* _EcJumps2, EcJMP* _EcJumps3)
 {
 	PntToSolve = _PntToSolve;
 	Range = _Range;
@@ -37,7 +33,6 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 	EcJumps1 = _EcJumps1;
 	EcJumps2 = _EcJumps2;
 	EcJumps3 = _EcJumps3;
-	EcJumps4 = _EcJumps4;
 	StopFlag = false;
 	Failed = false;
 	u64 total_mem = 0;
@@ -101,9 +96,7 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 		return false;
 	}
 
-
-	// Four kangaroos: each needs 16 u64 (128 bytes) per state
-	size = KangCnt * 128;
+	size = KangCnt * 96;
 	total_mem += size;
 	err = cudaMalloc((void**)&Kparams.Kangs, size);
 	if (err != cudaSuccess)
@@ -199,9 +192,19 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 	}
 
 	DPs_out = (u32*)malloc(MAX_DP_CNT * GPU_DP_SIZE);
+	if (!DPs_out)
+	{
+		printf("GPU %d, host malloc for DPs_out failed\n", CudaIndex);
+		return false;
+	}
 
 //jmp1
 	u64* buf = (u64*)malloc(JMP_CNT * 96);
+	if (!buf)
+	{
+		printf("GPU %d, host malloc for jmp buf failed\n", CudaIndex);
+		return false;
+	}
 	for (int i = 0; i < JMP_CNT; i++)
 	{
 		memcpy(buf + i * 12, EcJumps1[i].p.x.data, 32);
@@ -217,7 +220,9 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 	free(buf);
 //jmp2
 	buf = (u64*)malloc(JMP_CNT * 96);
+	if (!buf) { printf("GPU %d, host malloc for jmp buf failed\n", CudaIndex); return false; }
 	u64* jmp2_table = (u64*)malloc(JMP_CNT * 64);
+	if (!jmp2_table) { free(buf); printf("GPU %d, host malloc for jmp2_table failed\n", CudaIndex); return false; }
 	for (int i = 0; i < JMP_CNT; i++)
 	{
 		memcpy(buf + i * 12, EcJumps2[i].p.x.data, 32);
@@ -244,6 +249,7 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 	free(jmp2_table);
 //jmp3
 	buf = (u64*)malloc(JMP_CNT * 96);
+	if (!buf) { printf("GPU %d, host malloc for jmp buf failed\n", CudaIndex); return false; }
 	for (int i = 0; i < JMP_CNT; i++)
 	{
 		memcpy(buf + i * 12, EcJumps3[i].p.x.data, 32);
@@ -374,13 +380,17 @@ bool RCGpuKang::Start()
 				memcpy(RndPnts[i].x, buf_PntB, 64);
 	}
 	//copy to gpu
-	err = cudaMemcpy(Kparams.Kangs, RndPnts, KangCnt * 96, cudaMemcpyHostToDevice);
-	if (err != cudaSuccess)
+	// If kangs were preloaded from checkpoint, skip generation kernel
+	if (!KangsPreloaded)
 	{
-		printf("GPU %d, cudaMemcpy failed: %s\n", CudaIndex, cudaGetErrorString(err));
-		return false;
+		err = cudaMemcpy(Kparams.Kangs, RndPnts, KangCnt * 96, cudaMemcpyHostToDevice);
+		if (err != cudaSuccess)
+		{
+			printf("GPU %d, cudaMemcpy failed: %s\n", CudaIndex, cudaGetErrorString(err));
+			return false;
+		}
+		CallGpuKernelGen(Kparams);
 	}
-	CallGpuKernelGen(Kparams);
 
 	err = cudaMemset(Kparams.L1S2, 0, mpCnt * Kparams.BlockSize * 8);
 	if (err != cudaSuccess)
@@ -521,4 +531,34 @@ int RCGpuKang::GetStatsSpeed()
 	for (int i = 1; i < STATS_WND_SIZE; i++)
 		res += SpeedStats[i];
 	return res / STATS_WND_SIZE;
+}
+
+//executes in main thread
+// Saves the current state of all kangaroos in this GPU instance to the host buffer
+bool RCGpuKang::SaveKangs(u8* buf)
+{
+	if (!buf) return false;
+	size_t size = (size_t)Kparams.KangCnt * 12 * sizeof(u64); // 12 u64s per kangaroo
+	cudaError_t err = cudaMemcpy(buf, Kparams.Kangs, size, cudaMemcpyDeviceToHost);
+	if (err != cudaSuccess)
+	{
+		printf("GPU %d, cudaMemcpy failed in SaveKangs: %s\r\n", CudaIndex, cudaGetErrorString(err));
+		return false;
+	}
+	return true;
+}
+
+//executes in main thread
+// Loads kangaroo state from the host buffer back to the device memory
+bool RCGpuKang::LoadKangs(u8* buf)
+{
+	if (!buf) return false;
+	size_t size = (size_t)Kparams.KangCnt * 12 * sizeof(u64);
+	cudaError_t err = cudaMemcpy(Kparams.Kangs, buf, size, cudaMemcpyHostToDevice);
+	if (err != cudaSuccess)
+	{
+		printf("GPU %d, cudaMemcpy failed in LoadKangs: %s\r\n", CudaIndex, cudaGetErrorString(err));
+		return false;
+	}
+	return true;
 }

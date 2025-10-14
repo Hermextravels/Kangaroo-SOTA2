@@ -17,17 +17,6 @@ typedef short i16;
 typedef unsigned char u8;
 typedef char i8;
 
-// Forward declaration
-class EcInt;
-
-// Checkpoint structure for resumable operations
-struct CheckpointData {
-    u64 totalOps;
-    u32 pntIndex;
-    u8 checkpointVersion;
-    u64 currentStartWords[4];  // 256-bit number stored as 4 u64
-    u64 currentEndWords[4];    // 256-bit number stored as 4 u64
-};
 
 
 #define MAX_GPU_CNT			32
@@ -35,37 +24,31 @@ struct CheckpointData {
 //must be divisible by MD_LEN
 #define STEP_CNT			1000
 
-#define JMP_CNT				512  // Optimized for T4 constant memory
-
-// Memory management for T4
-#define JMP_TABLE_SPLIT    1
-#define JMP_BATCH_SIZE     256
-#define USE_SHARED_MEM_CACHE 1
+#define JMP_CNT				512
 
 //use different options for cards older than RTX 40xx
 #ifdef __CUDA_ARCH__
-    #if __CUDA_ARCH__ == 750  // Tesla T4
-        #define BLOCK_SIZE           256
-        #define PNT_GROUP_CNT       32
-    #elif __CUDA_ARCH__ < 890
-        #define OLD_GPU
-        #define BLOCK_SIZE          512
-        #define PNT_GROUP_CNT       64
-    #else
-        #define BLOCK_SIZE          256
-        #define PNT_GROUP_CNT       24
-    #endif
+	#if __CUDA_ARCH__ < 890
+		#define OLD_GPU
+	#endif
+	#ifdef OLD_GPU
+		#define BLOCK_SIZE			512
+		//can be 8, 16, 24, 32, 40, 48, 56, 64
+		#define PNT_GROUP_CNT		64	
+	#else
+		#define BLOCK_SIZE			256
+		//can be 8, 16, 24, 32
+		#define PNT_GROUP_CNT		24
+	#endif
 #else //CPU, fake values
 	#define BLOCK_SIZE			512
 	#define PNT_GROUP_CNT		64
 #endif
 
-
-// Kangaroo types for four-kangaroo method
-#define TAME				0  // Tame kang 1
-#define TAME2				1  // Tame kang 2
-#define WILD1				2  // Wild kang 1
-#define WILD2				3  // Wild kang 2
+// kang type
+#define TAME				0  // Tame kangs
+#define WILD1				1  // Wild kangs1 
+#define WILD2				2  // Wild kangs2
 
 #define GPU_DP_SIZE			48
 #define MAX_DP_CNT			(256 * 1024)
@@ -83,6 +66,10 @@ struct CheckpointData {
 #define MD_LEN				10
 
 //#define DEBUG_MODE
+
+// Checkpointing
+#define KANGS_RESUME_FILE	"RCKANGS_RESUME.BIN"
+#define CHECKPOINT_INTERVAL_SECS	300 // 5 minutes
 
 //gpu kernel parameters
 struct TKparams

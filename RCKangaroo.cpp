@@ -1,129 +1,3 @@
-// Forward declaration for CheckNewPoints
-#include <vector>
-#include <cstring>
-
-#include "defs.h"
-#include "utils.h"
-#include "GpuKang.h"   // for RCGpuKang
-#include "Ec.h"        // for EcPoint, EcInt
-
-// Forward declarations for globals and types used
-extern int GpuCnt;
-extern RCGpuKang* GpuKangs[];
-extern EcPoint gPntToSolve;
-extern volatile bool gSolved;
-extern EcInt gSolution;
-extern EcPoint Pnt_HalfRange;
-extern EcPoint Pnt_NegHalfRange;
-
-// Kangaroo type macros (should be in defs.h, but ensure here)
-#ifndef TAME
-#define TAME 0
-#endif
-#ifndef TAME2
-#define TAME2 1
-#endif
-#ifndef WILD1
-#define WILD1 2
-#endif
-#ifndef WILD2
-#define WILD2 3
-#endif
-
-// EcInt and EcPoint method stubs (if not defined elsewhere)
-// You may need to implement these in EcInt/EcPoint classes
-// class EcInt { public: void Add(const EcInt&); void Subtract(const EcInt&); void Negate(); u8 data[40]; };
-// class EcPoint { public: void Multiply(const EcInt&); void Negate(); bool Equals(const EcPoint&) const; };
-// Forward declaration for Collision_SOTA used by CheckNewPoints
-bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, bool IsNeg);
-
-void CheckNewPoints();
-
-// Structure for representing distinguished points
-struct DPRecord {
-	u8 d[22];  // Holds distance value
-	u8 type;   // Kangaroo type (TAME, TAME2, WILD1, WILD2)
-	u8 padding;
-};
-
-// Global storage for DPs
-static std::vector<DPRecord> gDPTable;
-static int dp_type_count[4] = {0}; // Counts per kangaroo type
-
-// Process new distinguished points from GPU output
-void CheckNewPoints() {
-	bool newCollision = false;
-
-	// Extract new DPs from GPU output buffers
-	for (int i = 0; i < GpuCnt; i++) {
-		u32* dp_out = GpuKangs[i]->GetDPOutput();
-		int dp_cnt = dp_out[0];
-		// pointer to first byte of first DP entry
-		u8* base = (u8*)(dp_out + 1);
-
-		for (int j = 0; j < dp_cnt; j++) {
-			DPRecord nrec;
-			// Copy the 22-byte distance and type from the GPU buffer using GPU_DP_SIZE stride
-			u8* entry = base + (size_t)j * GPU_DP_SIZE;
-			// d is stored starting at offset 16, length 22
-			memcpy(nrec.d, entry + 16, sizeof(nrec.d));
-			// type is stored at byte offset 40
-			nrec.type = entry[40];
-            
-			// Update statistics
-			if (nrec.type < 4) {
-				dp_type_count[nrec.type]++;
-			}
-
-			// Compare against existing DPs for collisions
-			for (const DPRecord& pref : gDPTable) {
-				// Skip same type collisions
-				if (pref.type == nrec.type) continue;
-                
-				// Skip wild-wild collisions between same groups
-				if ((pref.type >= WILD1) && (nrec.type >= WILD1)) continue;
-                
-				// Found matching distinguished point
-				if (memcmp(pref.d, nrec.d, 22) == 0) {
-					newCollision = true;
-                    
-					// Extract distances
-					EcInt w, t;
-					int TameType, WildType;
-                    
-					if (pref.type != TAME) {
-						memcpy(w.data, pref.d, sizeof(pref.d));
-						if (pref.d[21] == 0xFF) memset(((u8*)w.data) + 22, 0xFF, 18);
-						memcpy(t.data, nrec.d, sizeof(nrec.d));
-						if (nrec.d[21] == 0xFF) memset(((u8*)t.data) + 22, 0xFF, 18);
-						TameType = nrec.type;
-						WildType = pref.type;
-					} else {
-						memcpy(w.data, nrec.d, sizeof(nrec.d));
-						if (nrec.d[21] == 0xFF) memset(((u8*)w.data) + 22, 0xFF, 18);
-						memcpy(t.data, pref.d, sizeof(pref.d));
-						if (pref.d[21] == 0xFF) memset(((u8*)t.data) + 22, 0xFF, 18);
-						TameType = TAME;
-						WildType = nrec.type;
-					}
-
-					// Try collision with both positive and negative solutions
-					if (Collision_SOTA(gPntToSolve, t, TameType, w, WildType, false) || 
-						Collision_SOTA(gPntToSolve, t, TameType, w, WildType, true)) {
-						gSolved = true;
-						return;
-					}
-				}
-			}
-            
-			// Add new DP to table
-			gDPTable.push_back(nrec);
-		}
-        
-		// Reset GPU buffer count
-		dp_out[0] = 0;
-	}
-}
 // This file is a part of RCKangaroo software
 // (c) 2024, RetiredCoder (RC)
 // License: GPLv3, see "LICENSE.TXT" file
@@ -133,79 +7,22 @@ void CheckNewPoints() {
 #include <iostream>
 #include <vector>
 
-#ifdef NO_CUDA
-#include "cuda_stub.h"
-#else
 #include "cuda_runtime.h"
 #include "cuda.h"
-#endif
 
 #include "defs.h"
 #include "utils.h"
 #include "GpuKang.h"
-#include "defs.h"
-
-// Forward declaration for Collision_SOTA
-bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, bool IsNeg);
-
-// Verify potential solution found from collision
-bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, bool IsNeg) {
-	EcPoint wild, tame;
-    
-	// Compute tame kangaroo point
-	if (TameType == TAME) {
-		tame = Pnt_HalfRange;
-		tame.Multiply(t);
-	} else {
-		tame = Pnt_NegHalfRange; 
-		tame.Multiply(t);
-	}
-    
-	// Compute wild kangaroo point 
-	if (IsNeg) {
-		wild = pnt;
-		wild.Negate();
-	} else {
-		wild = pnt;
-	}
-    
-	EcPoint temp = wild;
-	if (WildType == WILD1 || WildType == WILD2) {
-		temp.Multiply(w);
-	}
-    
-	// Compare points
-	if (tame.Equals(temp)) {
-		// Found valid solution - calculate discrete log
-		EcInt sol = w;
-		if (TameType == TAME2 || WildType >= WILD1) {
-			sol.Subtract(t);
-		} else {
-			sol.Add(t); 
-		}
-        
-		if (IsNeg) {
-			sol.Negate();
-		}
-        
-		// Store solution and return success
-		memcpy(gSolution.data, sol.data, 40);
-		return true;
-	}
-    
-	return false;
-}
 
 
 EcJMP EcJumps1[JMP_CNT];
 EcJMP EcJumps2[JMP_CNT];
 EcJMP EcJumps3[JMP_CNT];
-EcJMP EcJumps4[JMP_CNT];
 
 RCGpuKang* GpuKangs[MAX_GPU_CNT];
 int GpuCnt;
 volatile long ThrCnt;
-// ...existing code...
+volatile bool gSolved;
 
 EcInt Int_HalfRange;
 EcPoint Pnt_HalfRange;
@@ -237,78 +54,23 @@ char gTamesFileName[1024];
 double gMax;
 bool gGenMode; //tames generation mode
 bool gIsOpsLimit;
-bool gResumeMode;
-char gCheckpointFile[1024];
-u32 gSubRangeCount;
-u32 gSubRangeIndex;
+
+// Checkpointing: host buffer for all kangaroo states
+u8* pKangsState = NULL;
+u64 KangsStateSize = 0; // Total size in bytes
+bool gResumeOk = false;
+// New: resume/main-mode support and configurable checkpoint interval
+bool gUseResume = false; // set by -resume
+u32 gCheckpointIntervalSecs = CHECKPOINT_INTERVAL_SECS;
 
 #pragma pack(push, 1)
 struct DBRec
 {
 	u8 x[12];
 	u8 d[22];
-	u8 type; // 0 - tame1, 1 - tame2, 2 - wild1, 3 - wild2
+	u8 type; //0 - tame, 1 - wild1, 2 - wild2
 };
 #pragma pack(pop)
-
-void SaveCheckpoint()
-{
-    CheckpointData cp;
-    cp.checkpointVersion = 1;
-    cp.totalOps = TotalOps;
-    cp.pntIndex = PntIndex;
-    
-    // Store the start range - copy directly from EcInt's internal data
-    memcpy(cp.currentStartWords, gStart.GetWords(), sizeof(u64) * 4);
-    
-    FILE* f = fopen(gCheckpointFile, "wb");
-	if (f) {
-		fwrite(&cp, sizeof(CheckpointData), 1, f);
-		// pPntList stores GPU_DP_SIZE bytes per point; write the full buffer
-		fwrite(pPntList, 1, (size_t)PntIndex * GPU_DP_SIZE, f);
-        fclose(f);
-        printf("\nCheckpoint saved: %llu ops, %u points\n", cp.totalOps, cp.pntIndex);
-    }
-}
-
-bool LoadCheckpoint()
-{
-    CheckpointData cp;
-    FILE* f = fopen(gCheckpointFile, "rb");
-    if (!f) {
-        printf("\nNo checkpoint file found\n");
-        return false;
-    }
-    
-    if (fread(&cp, sizeof(CheckpointData), 1, f) != 1) {
-        printf("\nError reading checkpoint header\n");
-        fclose(f);
-        return false;
-    }
-    
-    if (cp.checkpointVersion != 1) {
-        printf("\nInvalid checkpoint version\n");
-        fclose(f);
-        return false;
-    }
-    
-    TotalOps = cp.totalOps;
-    PntIndex = cp.pntIndex;
-    
-    // Restore the start range
-    gStart.SetWords(cp.currentStartWords);
-    
-	size_t bytesToRead = (size_t)PntIndex * GPU_DP_SIZE;
-	if (fread(pPntList, 1, bytesToRead, f) != bytesToRead) {
-        printf("\nError reading checkpoint data\n");
-        fclose(f);
-        return false;
-    }
-    
-    fclose(f);
-    printf("\nCheckpoint loaded: %llu ops, %u points\n", TotalOps, PntIndex);
-    return true;
-}
 
 void InitGpus()
 {
@@ -359,6 +121,7 @@ void InitGpus()
 		GpuKangs[GpuCnt]->persistingL2CacheMaxSize = deviceProp.persistingL2CacheMaxSize;
 		GpuKangs[GpuCnt]->mpCnt = deviceProp.multiProcessorCount;
 		GpuKangs[GpuCnt]->IsOldGpu = deviceProp.l2CacheSize < 16 * 1024 * 1024;
+            GpuKangs[GpuCnt]->KangsPreloaded = false;
 		GpuCnt++;
 	}
 	printf("Total GPUs for work: %d\r\n", GpuCnt);
@@ -391,39 +154,108 @@ void AddPointsToList(u32* data, int pnt_cnt, u64 ops_cnt)
 	}
 	memcpy(pPntList + GPU_DP_SIZE * PntIndex, data, pnt_cnt * GPU_DP_SIZE);
 	PntIndex += pnt_cnt;
-	int dp_type_count[4] = {0, 0, 0, 0};
-	for (int i = 0; i < PntIndex; i++) {
+	PntTotalOps += ops_cnt;
+	csAddPoints.Leave();
+}
+
+bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, bool IsNeg)
+{
+	if (IsNeg)
+		t.Neg();
+	if (TameType == TAME)
+	{
+		gPrivKey = t;
+		gPrivKey.Sub(w);
+		EcInt sv = gPrivKey;
+		gPrivKey.Add(Int_HalfRange);
+		EcPoint P = ec.MultiplyG(gPrivKey);
+		if (P.IsEqual(pnt))
+			return true;
+		gPrivKey = sv;
+		gPrivKey.Neg();
+		gPrivKey.Add(Int_HalfRange);
+		P = ec.MultiplyG(gPrivKey);
+		return P.IsEqual(pnt);
+	}
+	else
+	{
+		gPrivKey = t;
+		gPrivKey.Sub(w);
+		if (gPrivKey.data[4] >> 63)
+			gPrivKey.Neg();
+		gPrivKey.ShiftRight(1);
+		EcInt sv = gPrivKey;
+		gPrivKey.Add(Int_HalfRange);
+		EcPoint P = ec.MultiplyG(gPrivKey);
+		if (P.IsEqual(pnt))
+			return true;
+		gPrivKey = sv;
+		gPrivKey.Neg();
+		gPrivKey.Add(Int_HalfRange);
+		P = ec.MultiplyG(gPrivKey);
+		return P.IsEqual(pnt);
+	}
+}
+
+
+void CheckNewPoints()
+{
+	csAddPoints.Enter();
+	if (!PntIndex)
+	{
+		csAddPoints.Leave();
+		return;
+	}
+
+	int cnt = PntIndex;
+	memcpy(pPntList2, pPntList, GPU_DP_SIZE * cnt);
+	PntIndex = 0;
+	csAddPoints.Leave();
+
+	for (int i = 0; i < cnt; i++)
+	{
 		DBRec nrec;
-		// pPntList is where new points are copied into above; use it for processing
-		u8* p = pPntList + i * GPU_DP_SIZE;
+		u8* p = pPntList2 + i * GPU_DP_SIZE;
 		memcpy(nrec.x, p, 12);
 		memcpy(nrec.d, p + 16, 22);
 		nrec.type = gGenMode ? TAME : p[40];
-		if (!gGenMode && nrec.type >= 0 && nrec.type < 4) dp_type_count[nrec.type]++;
 
 		DBRec* pref = (DBRec*)db.FindOrAddDataBlock((u8*)&nrec);
-		if (gGenMode) continue;
-		if (pref) {
+		if (gGenMode)
+			continue;
+		if (pref)
+		{
+			//in db we dont store first 3 bytes so restore them
 			DBRec tmp_pref;
 			memcpy(&tmp_pref, &nrec, 3);
 			memcpy(((u8*)&tmp_pref) + 3, pref, sizeof(DBRec) - 3);
 			pref = &tmp_pref;
 
-			if (pref->type == nrec.type) {
-				if (pref->type == TAME) continue;
-				if (*(u64*)pref->d == *(u64*)nrec.d) continue;
+			if (pref->type == nrec.type)
+			{
+				if (pref->type == TAME)
+					continue;
+
+				//if it's wild, we can find the key from the same type if distances are different
+				if (*(u64*)pref->d == *(u64*)nrec.d)
+					continue;
+				//else
+				//	ToLog("key found by same wild");
 			}
 
 			EcInt w, t;
 			int TameType, WildType;
-			if (pref->type != TAME) {
+			if (pref->type != TAME)
+			{
 				memcpy(w.data, pref->d, sizeof(pref->d));
 				if (pref->d[21] == 0xFF) memset(((u8*)w.data) + 22, 0xFF, 18);
 				memcpy(t.data, nrec.d, sizeof(nrec.d));
 				if (nrec.d[21] == 0xFF) memset(((u8*)t.data) + 22, 0xFF, 18);
 				TameType = nrec.type;
 				WildType = pref->type;
-			} else {
+			}
+			else
+			{
 				memcpy(w.data, nrec.d, sizeof(nrec.d));
 				if (nrec.d[21] == 0xFF) memset(((u8*)w.data) + 22, 0xFF, 18);
 				memcpy(t.data, pref->d, sizeof(pref->d));
@@ -433,9 +265,13 @@ void AddPointsToList(u32* data, int pnt_cnt, u64 ops_cnt)
 			}
 
 			bool res = Collision_SOTA(gPntToSolve, t, TameType, w, WildType, false) || Collision_SOTA(gPntToSolve, t, TameType, w, WildType, true);
-			if (!res) {
+			if (!res)
+			{
 				bool w12 = ((pref->type == WILD1) && (nrec.type == WILD2)) || ((pref->type == WILD2) && (nrec.type == WILD1));
-				if (!w12) {
+				if (w12) //in rare cases WILD and WILD2 can collide in mirror, in this case there is no way to find K
+					;// ToLog("W1 and W2 collides in mirror");
+				else
+				{
 					printf("Collision Error\r\n");
 					gTotalErrors++;
 				}
@@ -445,7 +281,85 @@ void AddPointsToList(u32* data, int pnt_cnt, u64 ops_cnt)
 			break;
 		}
 	}
-	printf("DPs extracted: TAME=%d, TAME2=%d, WILD1=%d, WILD2=%d\n", dp_type_count[0], dp_type_count[1], dp_type_count[2], dp_type_count[3]);
+}
+
+// Save all kangaroo states (gather from all GPUs and write to file)
+bool SaveKangStates()
+{
+	if (KangsStateSize == 0 || !pKangsState) return false;
+	u64 cur_pos = 0;
+	for (int i = 0; i < GpuCnt; i++)
+	{
+		size_t size = (size_t)GpuKangs[i]->Kparams.KangCnt * 12 * sizeof(u64);
+		// synchronize GPU to reduce chance of copying mid-kernel
+		cudaSetDevice(GpuKangs[i]->CudaIndex);
+		cudaDeviceSynchronize();
+		if (!GpuKangs[i]->SaveKangs(pKangsState + cur_pos))
+			return false;
+		cur_pos += size;
+	}
+
+	FILE* fp = fopen(KANGS_RESUME_FILE, "wb");
+	if (!fp)
+	{
+		printf("WARNING: Cannot open %s for saving!\r\n", KANGS_RESUME_FILE);
+		return false;
+	}
+	// header: total size and GPU count
+	u64 header[2] = {KangsStateSize, (u64)GpuCnt};
+	fwrite(header, 1, sizeof(header), fp);
+	fwrite(pKangsState, 1, (size_t)KangsStateSize, fp);
+	fclose(fp);
+	return true;
+}
+
+// Load all kangaroo states from file and restore them to device memory
+bool LoadKangStates()
+{
+	FILE* fp = fopen(KANGS_RESUME_FILE, "rb");
+	if (!fp)
+	{
+		printf("Info: Resume file %s not found. Starting a new search.\r\n", KANGS_RESUME_FILE);
+		return false;
+	}
+	u64 header[2];
+	if (fread(header, 1, sizeof(header), fp) != sizeof(header))
+	{
+		printf("Error reading header from %s\r\n", KANGS_RESUME_FILE);
+		fclose(fp);
+		return false;
+	}
+	u64 file_size = header[0];
+	u32 file_gpu_cnt = (u32)header[1];
+	if (file_size != KangsStateSize || file_gpu_cnt != GpuCnt)
+	{
+		printf("Error: Resume file configuration mismatch. Starting a new search.\r\n");
+		printf("File Size: %llu, Current Size: %llu\r\n", file_size, KangsStateSize);
+		printf("File GpuCnt: %u, Current GpuCnt: %u\r\n", file_gpu_cnt, GpuCnt);
+		fclose(fp);
+		return false;
+	}
+	if (fread(pKangsState, 1, (size_t)KangsStateSize, fp) != (size_t)KangsStateSize)
+	{
+		printf("Error reading data from %s\r\n", KANGS_RESUME_FILE);
+		fclose(fp);
+		return false;
+	}
+	fclose(fp);
+
+	u64 cur_pos = 0;
+	for (int i = 0; i < GpuCnt; i++)
+	{
+		size_t size = (size_t)GpuKangs[i]->Kparams.KangCnt * 12 * sizeof(u64);
+		// synchronize device before loading
+		cudaSetDevice(GpuKangs[i]->CudaIndex);
+		cudaDeviceSynchronize();
+		if (!GpuKangs[i]->LoadKangs(pKangsState + cur_pos))
+			return false;
+		cur_pos += size;
+	}
+	printf("Successfully resumed from %s\r\n", KANGS_RESUME_FILE);
+	return true;
 }
 
 void ShowStats(u64 tm_start, double exp_ops, double dp_val)
@@ -574,18 +488,6 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 		EcJumps3[i].dist.data[0] &= 0xFFFFFFFFFFFFFFFE; //must be even
 		EcJumps3[i].p = ec.MultiplyG(EcJumps3[i].dist);
 	}
-
-	// Fourth kangaroo jumps (customize as needed)
-	minjump.Set(1);
-	minjump.ShiftLeft(Range - 10 - 4); // slightly different for diversity
-	for (int i = 0; i < JMP_CNT; i++)
-	{
-		EcJumps4[i].dist = minjump;
-		t.RndMax(minjump);
-		EcJumps4[i].dist.Add(t);
-		EcJumps4[i].dist.data[0] &= 0xFFFFFFFFFFFFFFFE; //must be even
-		EcJumps4[i].p = ec.MultiplyG(EcJumps4[i].dist);
-	}
 	SetRndSeed(GetTickCount64());
 
 	Int_HalfRange.Set(1);
@@ -603,11 +505,45 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 
 //prepare GPUs
 	for (int i = 0; i < GpuCnt; i++)
-		if (!GpuKangs[i]->Prepare(PntToSolve, Range, DP, EcJumps1, EcJumps2, EcJumps3, EcJumps4))
+		if (!GpuKangs[i]->Prepare(PntToSolve, Range, DP, EcJumps1, EcJumps2, EcJumps3))
 		{
 			GpuKangs[i]->Failed = true;
 			printf("GPU %d Prepare failed\r\n", GpuKangs[i]->CudaIndex);
 		}
+
+	// Allocate host buffer for checkpointing now that KangCnt is known
+	if (KangsStateSize == 0)
+	{
+		for (int i = 0; i < GpuCnt; i++)
+			KangsStateSize += (u64)GpuKangs[i]->Kparams.KangCnt * 12 * sizeof(u64);
+		if (KangsStateSize)
+		{
+			pKangsState = (u8*)malloc((size_t)KangsStateSize);
+			if (!pKangsState)
+			{
+				printf("Memory allocation failed for pKangsState!\r\n");
+				KangsStateSize = 0;
+			}
+		}
+	}
+
+	// If in generation mode or resume requested and we have a resume buffer, try to load previous state now
+	if ((gGenMode || gUseResume) && pKangsState)
+	{
+		// Attempt to load; this will copy data into device buffers allocated during Prepare
+		if (LoadKangStates())
+		{
+			gResumeOk = true;
+			for (int i = 0; i < GpuCnt; i++)
+				GpuKangs[i]->KangsPreloaded = true;
+		}
+		else
+		{
+			gResumeOk = false;
+			for (int i = 0; i < GpuCnt; i++)
+				GpuKangs[i]->KangsPreloaded = false;
+		}
+	}
 
 	u64 tm0 = GetTickCount64();
 	printf("GPUs started...\r\n");
@@ -631,6 +567,7 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 	}
 
 	u64 tm_stats = GetTickCount64();
+    u64 last_checkpoint_time = GetTickCount64();
 	while (!gSolved)
 	{
 		CheckNewPoints();
@@ -639,6 +576,24 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 		{
 			ShowStats(tm0, ops, dp_val);
 			tm_stats = GetTickCount64();
+		}
+
+		// Periodic checkpointing (only in generation mode)
+		if (gGenMode && pKangsState)
+		{
+			u64 current_time = GetTickCount64();
+			if ((current_time - last_checkpoint_time) > ((u64)gCheckpointIntervalSecs * 1000ull))
+			{
+				if (SaveKangStates())
+				{
+					printf("Checkpoint saved to %s\r\n", KANGS_RESUME_FILE);
+					last_checkpoint_time = current_time;
+				}
+				else
+				{
+					printf("Warning: checkpoint save failed\r\n");
+				}
+			}
 		}
 
 		if ((MaxTotalOps > 0.0) && (PntTotalOps > MaxTotalOps))
@@ -760,19 +715,21 @@ bool ParseCommandLine(int argc, char* argv[])
 		else
 		if (strcmp(argument, "-tames") == 0)
 		{
-			strcpy(gTamesFileName, argv[ci]);
+			snprintf(gTamesFileName, sizeof(gTamesFileName), "%s", argv[ci]);
 			ci++;
 		}
 		else
-		if (strcmp(argument, "-checkpoint") == 0)
+		if (strcmp(argument, "-resume") == 0)
 		{
-			if (ci >= argc) {
-				printf("error: missed value after -checkpoint option\r\n");
-				return false;
-			}
-			strncpy(gCheckpointFile, argv[ci], sizeof(gCheckpointFile) - 1);
-			gCheckpointFile[sizeof(gCheckpointFile) - 1] = '\0';
+			gUseResume = true;
+		}
+		else
+		if (strcmp(argument, "-checkpoint-secs") == 0)
+		{
+			int v = atoi(argv[ci]);
 			ci++;
+			if (v <= 0) { printf("error: invalid value for -checkpoint-secs\r\n"); return false; }
+			gCheckpointIntervalSecs = (u32)v;
 		}
 		else
 		if (strcmp(argument, "-max") == 0)
@@ -838,13 +795,9 @@ int main(int argc, char* argv[])
 	gRange = 0;
 	gStartSet = false;
 	gTamesFileName[0] = 0;
-	gCheckpointFile[0] = 0;
 	gMax = 0.0;
 	gGenMode = false;
 	gIsOpsLimit = false;
-	gResumeMode = false;
-	gSubRangeCount = 1;
-	gSubRangeIndex = 0;
 	memset(gGPUs_Mask, 1, sizeof(gGPUs_Mask));
 	if (!ParseCommandLine(argc, argv))
 		return 0;
@@ -856,6 +809,8 @@ int main(int argc, char* argv[])
 		printf("No supported GPUs detected, exit\r\n");
 		return 0;
 	}
+
+	// Note: resume/load will be attempted after GPU Prepare (device memory allocation)
 
 	pPntList = (u8*)malloc(MAX_CNT_LIST * GPU_DP_SIZE);
 	pPntList2 = (u8*)malloc(MAX_CNT_LIST * GPU_DP_SIZE);
@@ -961,5 +916,7 @@ label_end:
 	DeInitEc();
 	free(pPntList2);
 	free(pPntList);
+	if (pKangsState)
+		free(pKangsState);
 }
 

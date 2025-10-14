@@ -43,7 +43,6 @@ private:
 	EcJMP* EcJumps1;
 	EcJMP* EcJumps2;
 	EcJMP* EcJumps3;
-	EcJMP* EcJumps4;
 
 	EcPoint PntA;
 	EcPoint PntB;
@@ -64,15 +63,18 @@ public:
 	int KangCnt;
 	bool Failed;
 	bool IsOldGpu;
+    bool KangsPreloaded;
 
 	int CalcKangCnt();
-	bool Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJumps1, EcJMP* _EcJumps2, EcJMP* _EcJumps3, EcJMP* _EcJumps4);
+	bool Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJumps1, EcJMP* _EcJumps2, EcJMP* _EcJumps3);
 	void Stop();
 	void Execute();
 
 	u32 dbg[256];
 
 	int GetStatsSpeed();
-	// Expose DP output buffer for host-side processing
-	u32* GetDPOutput() { return DPs_out; }
+
+	// ADDED: Methods for checkpointing (Save/Load Kangs state to/from a host buffer)
+	bool SaveKangs(u8* buf);
+	bool LoadKangs(u8* buf);
 };
