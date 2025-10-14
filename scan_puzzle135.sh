@@ -66,6 +66,17 @@ LARGE_WIN_BITS_THRESHOLD=${LARGE_WIN_BITS_THRESHOLD:-56}
 LARGE_WIN_MAX_DP=${LARGE_WIN_MAX_DP:-24}   # new ceiling when WIN_BITS (or ACTIVE_WIN_BITS) >= threshold
 LARGER_WIN_MAX_DP=${LARGER_WIN_MAX_DP:-26} # optional second tier if WIN_BITS >= (threshold+4)
 
+# --- Collision control extensions ---
+# If enabled, compute collision rate (per minute) and adapt using rate thresholds instead of absolute count.
+COLLISION_RATE_MODE=${COLLISION_RATE_MODE:-0}
+COLLISION_RATE_THRESH=${COLLISION_RATE_THRESH:-5}        # collisions per minute -> raise DP by 1
+COLLISION_RATE_HIGH_THRESH=${COLLISION_RATE_HIGH_THRESH:-10} # collisions per minute -> raise DP by 2 (if room)
+# Preemptively raise DP at the *start* of next window if previous window exceeded absolute or rate thresholds.
+COLLISION_PREEMPT=${COLLISION_PREEMPT:-1}
+# File to persist last window collision stats
+LAST_COLLISION_FILE="$LOG_DIR/last_collision_count.txt"
+LAST_COLLISION_RATE_FILE="$LOG_DIR/last_collision_rate.txt"
+
 mkdir -p "$LOG_DIR"
 
 # Initialize ledger header if not present
@@ -210,6 +221,35 @@ while IFS= read -r START_HEX; do
     _win_index=$((_win_index+1))
     # Recompute base heuristic if size changed
     read DP DP_SLOTS MAX < <(_base_dp_heuristic "$ACTIVE_WIN_BITS")
+  fi
+
+  # Preemptive DP bump based on previous window collision stats
+  if [[ "$COLLISION_PREEMPT" -eq 1 ]]; then
+    if [[ -f "$LAST_COLLISION_FILE" ]]; then
+      prev_collisions=$(cat "$LAST_COLLISION_FILE" 2>/dev/null || echo 0)
+    else
+      prev_collisions=0
+    fi
+    if [[ -f "$LAST_COLLISION_RATE_FILE" ]]; then
+      prev_rate=$(cat "$LAST_COLLISION_RATE_FILE" 2>/dev/null || echo 0)
+    else
+      prev_rate=0
+    fi
+    pre_msg=""
+    if (( COLLISION_RATE_MODE == 1 )); then
+      if (( prev_rate > COLLISION_RATE_HIGH_THRESH && DP + 2 <= MAX_DP )); then
+        DP=$((DP+2)); pre_msg="preempt: rate>${COLLISION_RATE_HIGH_THRESH}/min -> +2 DP"; fi
+      if (( prev_rate > COLLISION_RATE_THRESH && prev_rate <= COLLISION_RATE_HIGH_THRESH && DP < MAX_DP )); then
+        DP=$((DP+1)); pre_msg="preempt: rate>${COLLISION_RATE_THRESH}/min -> +1 DP"; fi
+    else
+      if (( prev_collisions > COLLISION_THRESHOLD * 3 && DP + 2 <= MAX_DP )); then
+        DP=$((DP+2)); pre_msg="preempt: collisions>${COLLISION_THRESHOLD}*3 -> +2 DP"; fi
+      if (( prev_collisions > COLLISION_THRESHOLD && prev_collisions <= COLLISION_THRESHOLD * 3 && DP < MAX_DP )); then
+        DP=$((DP+1)); pre_msg="preempt: collisions>${COLLISION_THRESHOLD} -> +1 DP"; fi
+    fi
+    if [[ -n "$pre_msg" ]]; then
+      echo "ADAPT_PRE Window=$idx dp=$DP (${pre_msg})" | tee -a "$LOG_DIR/scan_summary.log"
+    fi
   fi
 
   # If using a very large window, optionally expand MAX_DP ceiling for collision suppression
@@ -411,6 +451,22 @@ PY
   collision_count_val=$(grep -c "Collision Error" "$LOG" || true)
   window_t1=$(date +%s)
   duration=$((window_t1-window_t0))
+  # Compute collision rate (per minute) if enabled
+  collision_rate=0
+  if (( duration > 0 )); then
+    collision_rate=$(( collision_count_val * 60 / duration ))
+  fi
+  if [[ "$COLLISION_RATE_MODE" -eq 1 ]]; then
+    # Adapt based on rate post window (only influences next window via preempt)
+    if (( collision_rate > COLLISION_RATE_HIGH_THRESH && DP + 2 <= MAX_DP )); then
+      echo "ADAPT_NEXT_RATE Window=$((idx+1)) pending dp+2 (rate=${collision_rate}/min)" | tee -a "$LOG_DIR/scan_summary.log"
+    elif (( collision_rate > COLLISION_RATE_THRESH && DP < MAX_DP )); then
+      echo "ADAPT_NEXT_RATE Window=$((idx+1)) pending dp+1 (rate=${collision_rate}/min)" | tee -a "$LOG_DIR/scan_summary.log"
+    fi
+  fi
+  # Persist for next window preempt logic
+  echo "$collision_count_val" > "$LAST_COLLISION_FILE"
+  echo "$collision_rate" > "$LAST_COLLISION_RATE_FILE"
   ts_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   echo "$ts_iso,$idx,$ACTIVE_WIN_BITS,$START_HEX,$DP,$DP_SLOTS,$MAX,${dp_count_val:-0},${clamp_events_val:-0},${collision_count_val:-0},${last_speed:-0},$duration" >> "$LEDGER_FILE"
 
