@@ -1,19 +1,31 @@
 CC := g++
-CUDA_PATH ?= $(CUDA_HOME)
-ifeq ($(CUDA_PATH),)
-CUDA_PATH := /usr/local/cuda
+# Prefer explicit CUDA_PATH, then CUDA_HOME, else fallback to /usr/local/cuda
+ifdef CUDA_PATH
+CUDA_ROOT := $(CUDA_PATH)
+else
+ifdef CUDA_HOME
+CUDA_ROOT := $(CUDA_HOME)
+else
+CUDA_ROOT := /usr/local/cuda
 endif
-NVCC ?= $(CUDA_PATH)/bin/nvcc
+endif
 
-CCFLAGS := -O3 -I$(CUDA_PATH)/include
+NVCC ?= $(CUDA_ROOT)/bin/nvcc
+
+# Compiler flags
+CCFLAGS := -O3 -I$(CUDA_ROOT)/include
 NVCCFLAGS := -O3 -gencode=arch=compute_89,code=compute_89 -gencode=arch=compute_86,code=compute_86 -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_61,code=compute_61
-LDFLAGS := -L$(CUDA_PATH)/lib64 -lcudart -pthread
+LDFLAGS := -L$(CUDA_ROOT)/lib64 -lcudart -pthread
 
 .PHONY: check_cuda
 check_cuda:
-	@if [ ! -x "$(NVCC)" ]; then \
-		echo "nvcc not found at $(NVCC)"; \
-		echo "Set CUDA_PATH or CUDA_HOME to your CUDA installation, e.g. export CUDA_PATH=/usr/local/cuda"; \
+	@if [ ! -x "$(NVCC)" ] || [ ! -d "$(CUDA_ROOT)/include" ]; then \
+		echo "CUDA toolchain not found under $(CUDA_ROOT)"; \
+		echo "nvcc: $(NVCC)"; \
+		echo "Include dir: $(CUDA_ROOT)/include"; \
+		echo "Set CUDA_PATH or CUDA_HOME to your CUDA installation, e.g."; \
+		echo "  export CUDA_PATH=/usr/local/cuda"; \
+		echo "or install CUDA and ensure nvcc and headers are available."; \
 		exit 1; \
 	fi
 

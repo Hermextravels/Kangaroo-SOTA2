@@ -290,7 +290,7 @@ bool SaveKangStates()
 	u64 cur_pos = 0;
 	for (int i = 0; i < GpuCnt; i++)
 	{
-		size_t size = (size_t)GpuKangs[i]->Kparams.KangCnt * 12 * sizeof(u64);
+	size_t size = (size_t)GpuKangs[i]->KangCnt * 12 * sizeof(u64);
 		// synchronize GPU to reduce chance of copying mid-kernel
 		cudaSetDevice(GpuKangs[i]->CudaIndex);
 		cudaDeviceSynchronize();
@@ -350,7 +350,7 @@ bool LoadKangStates()
 	u64 cur_pos = 0;
 	for (int i = 0; i < GpuCnt; i++)
 	{
-		size_t size = (size_t)GpuKangs[i]->Kparams.KangCnt * 12 * sizeof(u64);
+	size_t size = (size_t)GpuKangs[i]->KangCnt * 12 * sizeof(u64);
 		// synchronize device before loading
 		cudaSetDevice(GpuKangs[i]->CudaIndex);
 		cudaDeviceSynchronize();
@@ -515,7 +515,7 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 	if (KangsStateSize == 0)
 	{
 		for (int i = 0; i < GpuCnt; i++)
-			KangsStateSize += (u64)GpuKangs[i]->Kparams.KangCnt * 12 * sizeof(u64);
+						KangsStateSize += (u64)GpuKangs[i]->KangCnt * 12 * sizeof(u64);
 		if (KangsStateSize)
 		{
 			pKangsState = (u8*)malloc((size_t)KangsStateSize);
