@@ -831,12 +831,6 @@ bool ParseCommandLine(int argc, char* argv[])
 			}
 			gMax = val;
 		}
-		else
-		{
-			printf("error: unknown option %s\r\n", argument);
-			return false;
-		}
-	}
 		else if (strcmp(argument, "-dp-auto") == 0)
 		{
 			gDPAuto = true;
@@ -847,6 +841,7 @@ bool ParseCommandLine(int argc, char* argv[])
 		}
 		else if (strcmp(argument, "-mem-cap-mb") == 0)
 		{
+			if (ci >= argc) { printf("error: missed value after -mem-cap-mb option\r\n"); return false; }
 			int val = atoi(argv[ci]);
 			ci++;
 			if (val < 512 || val > 15000) { printf("error: invalid value for -mem-cap-mb option (512..15000)\r\n"); return false; }
@@ -854,11 +849,19 @@ bool ParseCommandLine(int argc, char* argv[])
 		}
 		else if (strcmp(argument, "-split-range") == 0)
 		{
+			if (ci >= argc) { printf("error: missed value after -split-range option\r\n"); return false; }
 			int val = atoi(argv[ci]);
 			ci++;
 			if (val < 1 || val > 1000000) { printf("error: invalid value for -split-range option (1..1000000)\r\n"); return false; }
 			gSplitRangeN = (u32)val;
 		}
+		else
+		{
+			printf("error: unknown option %s\r\n", argument);
+			return false;
+		}
+	}
+
 	if (!gPubKey.x.IsZero())
 		if (!gStartSet || !gRange || !gDP)
 		{
