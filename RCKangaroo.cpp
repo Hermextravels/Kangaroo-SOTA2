@@ -60,6 +60,7 @@ u32 gDPTableSlotsOverride = 0; // 0 = auto, otherwise override slots per kangaro
 bool gDPAuto = false; // auto-select DP bits based on memory and range
 u32 gMemCapMB = 3800; // target DP table memory cap in MB (default ~3.8GB)
 u32 gSplitRangeN = 0; // optional: generate N subranges and exit
+bool gQuietCollisions = false; // suppress printing each Collision Error event
 
 // Checkpointing: host buffer for all kangaroo states
 u8* pKangsState = NULL;
@@ -286,7 +287,8 @@ void CheckNewPoints()
 					;// ToLog("W1 and W2 collides in mirror");
 				else
 				{
-					printf("Collision Error\r\n");
+					if (!gQuietCollisions)
+						printf("Collision Error\r\n");
 					gTotalErrors++;
 				}
 				continue;
@@ -854,6 +856,10 @@ bool ParseCommandLine(int argc, char* argv[])
 			ci++;
 			if (val < 1 || val > 1000000) { printf("error: invalid value for -split-range option (1..1000000)\r\n"); return false; }
 			gSplitRangeN = (u32)val;
+		}
+		else if (strcmp(argument, "-quiet-collisions") == 0)
+		{
+			gQuietCollisions = true;
 		}
 		else
 		{

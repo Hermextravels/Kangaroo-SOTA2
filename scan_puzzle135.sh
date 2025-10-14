@@ -77,7 +77,46 @@ COLLISION_PREEMPT=${COLLISION_PREEMPT:-1}
 LAST_COLLISION_FILE="$LOG_DIR/last_collision_count.txt"
 LAST_COLLISION_RATE_FILE="$LOG_DIR/last_collision_rate.txt"
 
+# --- DP floor safeguard (prevents DP from staying too high and starving DP density) ---
+# Enable with DP_FLOOR_ENABLED=1. If the last iteration's dp_count falls below DP_FLOOR_DPCOUNT
+# for DP_FLOOR_CONSEC consecutive windows (and clamp pressure is low), we decrease DP by DP_FLOOR_DECR.
+DP_FLOOR_ENABLED=${DP_FLOOR_ENABLED:-0}
+DP_FLOOR_DPCOUNT=${DP_FLOOR_DPCOUNT:-6000}      # minimum healthy dp_count target
+DP_FLOOR_CONSEC=${DP_FLOOR_CONSEC:-2}           # consecutive low-density windows before action
+DP_FLOOR_DECR=${DP_FLOOR_DECR:-1}               # bits to lower when condition met
+# Internal: dynamic upper cap enforced after a floor adjustment (initialized high so inactive until first trigger)
+DP_FLOOR_CAP=${DP_FLOOR_CAP:-999}
+
+# --- Probability / coverage optimization extensions ---
+# Track approximate keyspace coverage (sum of 2^win_bits for unique windows scanned)
+# This is a simplistic upper bound ignoring overlaps; for small random sampling overlaps are negligible.
+COVERAGE_TRACK=${COVERAGE_TRACK:-1}          # 1=enable coverage probability estimation
+COVERAGE_STATE_FILE=${COVERAGE_STATE_FILE:-"$LOG_DIR/coverage_state.txt"} # persists cumulative covered size (decimal integer)
+COVERAGE_WINDOWS_FILE=${COVERAGE_WINDOWS_FILE:-"$LOG_DIR/visited_windows.txt"} # tracks start_hex,win_bits pairs
+SKIP_DUP_WINDOWS=${SKIP_DUP_WINDOWS:-1}      # Skip exact duplicate (start,bits) windows already processed
+# Weighted window size selection (overrides WIN_CYCLE_MODE random/roundrobin if provided)
+# Format: WEIGHTED_WIN_BITS="40:5,42:3,44:2" meaning weight 5 for 40-bit, etc.
+WEIGHTED_WIN_BITS=${WEIGHTED_WIN_BITS:-""}
+# Optional target cumulative coverage probability (e.g. 0.000001) to stop early when reached
+STOP_AT_PROB=${STOP_AT_PROB:-0}
+# DP band controller: maintain dp_count within a target band for stable efficiency
+DP_BAND_MODE=${DP_BAND_MODE:-0}              # 1=enable closed-loop band control after other adaptations
+DP_TARGET_MIN=${DP_TARGET_MIN:-12000}         # desired lower bound for iteration DP count
+DP_TARGET_MAX=${DP_TARGET_MAX:-28000}         # desired upper bound
+DP_BAND_HYST=${DP_BAND_HYST:-3000}            # hysteresis to prevent flip-flop
+# Quiet collision flag pass-through to solver (solver must support -quiet-collisions)
+QUIET_COLLISIONS=${QUIET_COLLISIONS:-1}
+
+
 mkdir -p "$LOG_DIR"
+
+# Initialize coverage tracking files if enabled
+if (( COVERAGE_TRACK == 1 )); then
+  : > "$COVERAGE_WINDOWS_FILE"  # create if missing (we will append conditionally)
+  if [[ ! -f "$COVERAGE_STATE_FILE" ]]; then
+    echo "0" > "$COVERAGE_STATE_FILE"  # cumulative covered keys (approx)
+  fi
+fi
 
 # Initialize ledger header if not present
 if [[ ! -f "$LEDGER_FILE" ]]; then
@@ -190,6 +229,41 @@ else
   echo "Multi window sizes enabled: ${_WIN_LIST[*]} (mode=$WIN_CYCLE_MODE)"
 fi
 
+# Parse weighted window bits if provided (takes precedence over WIN_CYCLE_MODE random selection)
+declare -a _WEIGHTED_WB _WEIGHTED_ACCUM
+_WEIGHT_SUM=0
+if [[ -n "$WEIGHTED_WIN_BITS" ]]; then
+  IFS=',' read -r -a _WB_RAW <<< "$WEIGHTED_WIN_BITS"
+  for ent in "${_WB_RAW[@]}"; do
+    wb_part="${ent%%:*}"; wt_part="${ent##*:}"
+    if [[ -n "$wb_part" && -n "$wt_part" && $wb_part =~ ^[0-9]+$ && $wt_part =~ ^[0-9]+$ ]]; then
+      _WEIGHT_SUM=$((_WEIGHT_SUM + wt_part))
+      _WEIGHTED_WB+=("$wb_part")
+      _WEIGHTED_ACCUM+=("$_WEIGHT_SUM")
+    fi
+  done
+  if (( _WEIGHT_SUM > 0 )); then
+    echo "Weighted window size selection active: $WEIGHTED_WIN_BITS (totalWeight=$_WEIGHT_SUM)" | tee -a "$LOG_DIR/scan_summary.log"
+  else
+    echo "Warning: WEIGHTED_WIN_BITS specified but parsed weight sum=0; ignoring." | tee -a "$LOG_DIR/scan_summary.log"
+  fi
+fi
+
+# Helper: draw weighted window bits
+_pick_weighted_bits() {
+  if (( _WEIGHT_SUM == 0 )); then
+    echo "$WIN_BITS"; return
+  fi
+  local r=$((RANDOM % _WEIGHT_SUM + 1))
+  local i
+  for i in "${!_WEIGHTED_ACCUM[@]}"; do
+    if (( r <= _WEIGHTED_ACCUM[i] )); then
+      echo "${_WEIGHTED_WB[i]}"; return
+    fi
+  done
+  echo "${_WEIGHTED_WB[-1]}"
+}
+
 # (legacy block kept for backward compatibility if user inspects script)
 if [[ -z "$MULTI_WIN_BITS" && "$DP_AUTO" -eq 1 ]]; then
   # Heuristic: for tiny windows, lower DP to emit enough DPs per kangaroo
@@ -200,6 +274,7 @@ fi
 # --- iterate windows ---
 idx=0
 _win_index=0
+lowdp_consec=0
 while IFS= read -r START_HEX; do
   idx=$((idx+1))
   [[ -z "$START_HEX" ]] && continue
@@ -212,15 +287,24 @@ while IFS= read -r START_HEX; do
   # Determine active window bits (possibly cycling)
   ACTIVE_WIN_BITS="$WIN_BITS"
   if [[ -n "$MULTI_WIN_BITS" ]]; then
-    if [[ "$WIN_CYCLE_MODE" == "random" ]]; then
-      # shell-safe random pick
-      ACTIVE_WIN_BITS=${_WIN_LIST[$RANDOM % ${#_WIN_LIST[@]}]}
+    if [[ -n "$WEIGHTED_WIN_BITS" && $_WEIGHT_SUM -gt 0 ]]; then
+      ACTIVE_WIN_BITS=$(_pick_weighted_bits)
     else
-      ACTIVE_WIN_BITS=${_WIN_LIST[$((_win_index % ${#_WIN_LIST[@]}))]}
+      if [[ "$WIN_CYCLE_MODE" == "random" ]]; then
+        ACTIVE_WIN_BITS=${_WIN_LIST[$RANDOM % ${#_WIN_LIST[@]}]}
+      else
+        ACTIVE_WIN_BITS=${_WIN_LIST[$((_win_index % ${#_WIN_LIST[@]}))]}
+      fi
+      _win_index=$((_win_index+1))
     fi
-    _win_index=$((_win_index+1))
-    # Recompute base heuristic if size changed
-    read DP DP_SLOTS MAX < <(_base_dp_heuristic "$ACTIVE_WIN_BITS")
+    read DP DP_SLOTS MAX < <(_base_dp_heuristic "$ACTIVE_WIN_BITS")  # refresh heuristic per active bits
+  fi
+
+  # Enforce DP floor cap if a previous low-density adjustment requested it
+  if (( DP_FLOOR_ENABLED == 1 )) && (( DP_FLOOR_CAP != 999 )) && (( DP > DP_FLOOR_CAP )); then
+    prev_dp=$DP
+    DP=$DP_FLOOR_CAP
+    echo "ADAPT_FLOOR_CAP Window=$idx applied dp=$DP (cap from prior low-density; was $prev_dp)" | tee -a "$LOG_DIR/scan_summary.log"
   fi
 
   # Preemptive DP bump based on previous window collision stats
@@ -277,6 +361,14 @@ while IFS= read -r START_HEX; do
     continue
   fi
 
+  # Skip duplicate (start,bits) windows if coverage tracking of uniqueness enabled
+  if (( COVERAGE_TRACK == 1 )) && (( SKIP_DUP_WINDOWS == 1 )); then
+    if grep -q "^${START_HEX},${ACTIVE_WIN_BITS}$" "$COVERAGE_WINDOWS_FILE" 2>/dev/null; then
+      echo "[Window $idx] duplicate start/bits encountered, skipping: $START_HEX,$ACTIVE_WIN_BITS" | tee -a "$LOG_DIR/scan_summary.log"
+      continue
+    fi
+  fi
+
   # Optional: compute MAX from desired time budget and estimated throughput
   if [[ "$TARGET_SEC" -gt 0 ]]; then
     # MAX is multiplicative of the window's expected op count, but we don't know that here.
@@ -322,6 +414,9 @@ PY
   # build command
   cmd=("$RCK_BIN" "-dp" "$DP" "-dp-slots" "$DP_SLOTS" "-resume" "-checkpoint-secs" "$CHECKPOINT_SECS" \
     "-start" "$START_HEX" "-range" "$ACTIVE_WIN_BITS" "-max" "$MAX" "-pubkey" "$PUBKEY")
+  if (( QUIET_COLLISIONS == 1 )); then
+    cmd+=("-quiet-collisions")
+  fi
   if [[ -n "$GPU" ]]; then
     cmd=("${cmd[@]}" "-gpu" "$GPU")
   fi
@@ -434,6 +529,24 @@ PY
     fi
   fi
 
+  # DP band controller (executed after adaptive logic) aims to keep dp_count in target band
+  if (( DP_BAND_MODE == 1 )) && [[ -n "$last_iter_line" ]]; then
+    # dp_count extracted earlier or re-extract
+    band_dp_count=$dp_count
+    if [[ -z "$band_dp_count" || "$band_dp_count" == 0 ]]; then
+      band_dp_count=$(echo "$last_iter_line" | sed -E 's/.*Iteration DP count=([0-9]+).*/\1/')
+    fi
+    band_msg=""
+    if (( band_dp_count < DP_TARGET_MIN - DP_BAND_HYST )) && (( DP > MIN_DP )); then
+      DP=$((DP-1)); band_msg="bandLow<$DP_TARGET_MIN: -DP -> $DP";
+    elif (( band_dp_count > DP_TARGET_MAX + DP_BAND_HYST )) && (( DP < MAX_DP )); then
+      DP=$((DP+1)); band_msg="bandHigh>$DP_TARGET_MAX: +DP -> $DP";
+    fi
+    if [[ -n "$band_msg" ]]; then
+      echo "ADAPT_BAND Window=$((idx+1)) dp=$DP (${band_msg}; dp_count=$band_dp_count target=[${DP_TARGET_MIN},${DP_TARGET_MAX}])" | tee -a "$LOG_DIR/scan_summary.log"
+    fi
+  fi
+
   # --- Ledger collection (independent of adaptive logic) ---
   # Gather metrics from this window's log and append one CSV row.
   last_iter_line=$(grep -E "Iteration DP count=" "$LOG" | tail -n1 || true)
@@ -470,6 +583,78 @@ PY
   ts_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   echo "$ts_iso,$idx,$ACTIVE_WIN_BITS,$START_HEX,$DP,$DP_SLOTS,$MAX,${dp_count_val:-0},${clamp_events_val:-0},${collision_count_val:-0},${last_speed:-0},$duration" >> "$LEDGER_FILE"
 
+  # Coverage accounting & probability estimate
+  if (( COVERAGE_TRACK == 1 )); then
+    # Record unique window and increment cumulative coverage size (approx) if not already seen
+    if ! grep -q "^${START_HEX},${ACTIVE_WIN_BITS}$" "$COVERAGE_WINDOWS_FILE" 2>/dev/null; then
+      echo "${START_HEX},${ACTIVE_WIN_BITS}" >> "$COVERAGE_WINDOWS_FILE"
+      current_cov=$(cat "$COVERAGE_STATE_FILE" 2>/dev/null || echo 0)
+      win_add=$((1 << ACTIVE_WIN_BITS))
+      new_cov=$(( current_cov + win_add ))
+      echo "$new_cov" > "$COVERAGE_STATE_FILE"
+      # Probability that random target key lies in covered set ~ new_cov / 2^SPAN_BITS (cap at 1)
+      prob=$(python3 - <<PY
+import decimal,math
+decimal.getcontext().prec=28
+covered=int("$new_cov")
+total=1<<$SPAN_BITS
+p=min(decimal.Decimal(covered)/decimal.Decimal(total), decimal.Decimal(1))
+print(p)
+PY
+)
+      echo "COVERAGE Window=$idx cumulative_keys=$new_cov prob=${prob}" | tee -a "$LOG_DIR/scan_summary.log"
+      if (( STOP_AT_PROB > 0 )); then
+        # Compare floating numbers in python for accuracy
+        halt=$(python3 - <<PY
+import decimal
+p=decimal.Decimal("$prob")
+thr=decimal.Decimal("$STOP_AT_PROB")
+print(1 if p>=thr else 0)
+PY
+)
+        if [[ "$halt" == "1" ]]; then
+          echo "Stopping: coverage probability threshold STOP_AT_PROB=$STOP_AT_PROB reached (p=$prob)." | tee -a "$LOG_DIR/scan_summary.log"
+          break
+        fi
+      fi
+    fi
+  fi
+
+  # --- DP floor safeguard evaluation (after metrics collected) ---
+  if (( DP_FLOOR_ENABLED == 1 )); then
+    # Consider it a low-density window if dp_count_val below threshold and we were not clamp-limited
+    if (( dp_count_val > 0 )) && (( dp_count_val < DP_FLOOR_DPCOUNT )) && (( clamp_events_val < CLAMP_THRESHOLD / 3 )); then
+      lowdp_consec=$((lowdp_consec+1))
+    else
+      lowdp_consec=0
+    fi
+    if (( lowdp_consec >= DP_FLOOR_CONSEC )) && (( DP > MIN_DP )); then
+      old_dp=$DP
+      # Lower DP (making DPs denser) but not below MIN_DP
+      dec=$DP_FLOOR_DECR
+      if (( DP - dec < MIN_DP )); then dec=$((DP-MIN_DP)); fi
+      if (( dec > 0 )); then
+        DP=$((DP - dec))
+        DP_FLOOR_CAP=$DP  # enforce as cap for future heuristic resets
+        echo "ADAPT_FLOOR Window=$((idx+1)) dp=$DP (reduced from $old_dp after ${lowdp_consec} low-density windows, dp_count=$dp_count_val<thresh=$DP_FLOOR_DPCOUNT)" | tee -a "$LOG_DIR/scan_summary.log"
+      fi
+      lowdp_consec=0
+    fi
+  fi
+
 done < "$STARTS_FILE"
 
 echo "All $idx windows completed. No result detected."
+if (( COVERAGE_TRACK == 1 )); then
+  cov=$(cat "$COVERAGE_STATE_FILE" 2>/dev/null || echo 0)
+  prob=$(python3 - <<PY
+import decimal
+covered=int("$cov")
+total=1<<$SPAN_BITS
+from decimal import Decimal, getcontext
+getcontext().prec=28
+print(min(Decimal(covered)/Decimal(total), Decimal(1)))
+PY
+)
+  echo "Final approximate cumulative coverage: $cov keys (~probability $prob)." | tee -a "$LOG_DIR/scan_summary.log"
+fi
