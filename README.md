@@ -30,6 +30,12 @@ Discussion thread: https://bitcointalk.org/index.php?topic=5517607
 
 <b>-dp</b>		DP bits. Must be in range 14...60. Low DP bits values cause larger DB but reduces DP overhead and vice versa. 
 
+<b>-resume</b>		Enable checkpoint/resume of live kangaroo states (periodically saves to RCKANGS_RESUME.BIN and restores on restart).
+
+<b>-checkpoint-secs</b>	Interval in seconds between automatic resume checkpoints (default 300).
+
+<b>-dp-slots</b>	Override the number of distinguished-point slots per kangaroo (1..16). By default, slots are auto-sized based on DP and range.
+
 <b>-max</b>		option to limit max number of operations. For example, value 5.5 limits number of operations to 5.5 * 1.15 * sqrt(range), software stops when the limit is reached. 
 
 <b>-tames</b>		filename with tames. If file not found, software generates tames (option "-max" is required) and saves them to the file. If the file is found, software loads tames to speedup solving. 
@@ -45,6 +51,15 @@ Sample command to generate tames:
 RCKangaroo.exe -dp 16 -range 76 -tames tames76.dat -max 10
 
 Then you can restart software with same parameters to see less K in benchmark mode or add "-tames tames76.dat" to solve some public key in 76-bit range faster.
+
+<b>Notes on DP table sizing:</b>
+
+- By default, the per-kangaroo DP table is sized dynamically based on expected DP emission. You can cap or tune memory via <code>-dp-slots</code> (1..16).
+- If your logs show frequent "Collision Error" messages, increase <code>-dp</code> (e.g., +2) or raise <code>-dp-slots</code> to reduce DP overflow.
+
+<b>Runner integration:</b>
+
+The helper script <code>run_small_offsets.sh</code> supports streaming logs, resume, per-chunk timeouts, and a <code>DP_SLOTS</code> env var that maps to <code>-dp-slots</code>.
 
 <b>Some notes:</b>
 

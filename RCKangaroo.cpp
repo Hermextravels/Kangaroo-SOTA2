@@ -54,6 +54,7 @@ char gTamesFileName[1024];
 double gMax;
 bool gGenMode; //tames generation mode
 bool gIsOpsLimit;
+u32 gDPTableSlotsOverride = 0; // 0 = auto, otherwise override slots per kangaroo
 
 // Checkpointing: host buffer for all kangaroo states
 u8* pKangsState = NULL;
@@ -722,6 +723,18 @@ bool ParseCommandLine(int argc, char* argv[])
 		if (strcmp(argument, "-resume") == 0)
 		{
 			gUseResume = true;
+		}
+		else
+		if (strcmp(argument, "-dp-slots") == 0)
+		{
+			int val = atoi(argv[ci]);
+			ci++;
+			if (val < 1 || val > DPTABLE_MAX_CNT)
+			{
+				printf("error: invalid value for -dp-slots option (1..%d)\r\n", DPTABLE_MAX_CNT);
+				return false;
+			}
+			gDPTableSlotsOverride = (u32)val;
 		}
 		else
 		if (strcmp(argument, "-checkpoint-secs") == 0)

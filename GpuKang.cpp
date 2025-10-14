@@ -5,6 +5,7 @@
 
 
 #include <iostream>
+#include <math.h>
 #include "cuda_runtime.h"
 #include "cuda.h"
 
@@ -55,6 +56,7 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 	Kparams.KernelB_LDS_Size = 64 * JMP_CNT;
 	Kparams.KernelC_LDS_Size = 96 * JMP_CNT;
 	Kparams.IsGenMode = gGenMode;
+    Kparams.DPTableSlots = DPTABLE_MAX_CNT; // default, may be reduced below
 
 //allocate gpu mem
 	u64 size;
@@ -70,6 +72,7 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 			return false;
 		}
 		size = L2size;
+			cudaMemset(Kparams.DPClamped, 0, sizeof(u32));
 		if (size > persistingL2CacheMaxSize)
 			size = persistingL2CacheMaxSize;
 		err = cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, size); // set max allowed size for L2
@@ -138,7 +141,24 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 		return false;
 	}
 
-	size = (u64)KangCnt * (16 * DPTABLE_MAX_CNT + sizeof(u32)); //we store 16bytes of X
+	// Dynamic DP table sizing: estimate slots per kangaroo
+	{
+		double ops = 1.15 * pow(2.0, Range / 2.0);
+		double dp_val = (double)(1ull << DP);
+		double path_single_kang = ops / (double)Kparams.KangCnt;
+		double DPs_per_kang = path_single_kang / dp_val;
+		// reserve a small multiple of expected per-kangaroo DPs in the table (min 4, max DPTABLE_MAX_CNT)
+		int slots = (int)(DPs_per_kang * 4.0) + 4;
+		if (slots < 4) slots = 4;
+		if (slots > DPTABLE_MAX_CNT) slots = DPTABLE_MAX_CNT;
+		// allow override from global flag if set
+		extern u32 gDPTableSlotsOverride;
+		Kparams.DPTableSlots = (gDPTableSlotsOverride ? gDPTableSlotsOverride : (u32)slots);
+		// diagnostic: report chosen DP slots per kangaroo
+		printf("GPU %d: KangCnt=%u, DP=%u, DPTableSlots/kang=%u%s\n", CudaIndex, (unsigned)Kparams.KangCnt, (unsigned)Kparams.DP, (unsigned)Kparams.DPTableSlots, gDPTableSlotsOverride ? " (override)" : "");
+	}
+
+	size = (u64)KangCnt * (16 * Kparams.DPTableSlots + sizeof(u32)); // store 16 bytes of X per slot
 	total_mem += size;
 	err = cudaMalloc((void**)&Kparams.DPTable, size);
 	if (err != cudaSuccess)
@@ -146,6 +166,7 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 		printf("GPU %d Allocate DPTable memory failed: %s\n", CudaIndex, cudaGetErrorString(err));
 		return false;
 	}
+	printf("GPU %d: DPTable allocated: %llu bytes (per-kang: %u slots)\n", CudaIndex, (unsigned long long)size, Kparams.DPTableSlots);
 
 	size = mpCnt * Kparams.BlockSize * sizeof(u64);
 	total_mem += size;
@@ -188,6 +209,14 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 	if (err != cudaSuccess)
 	{
 		printf("GPU %d Allocate LoopedKangs memory failed: %s\n", CudaIndex, cudaGetErrorString(err));
+		return false;
+	}
+
+	// allocate clamped counter (single u32)
+	err = cudaMalloc((void**)&Kparams.DPClamped, sizeof(u32));
+	if (err != cudaSuccess)
+	{
+		printf("GPU %d Allocate DPClamped memory failed: %s\n", CudaIndex, cudaGetErrorString(err));
 		return false;
 	}
 
@@ -284,6 +313,7 @@ void RCGpuKang::Release()
 	cudaFree(Kparams.Jumps1);
 	cudaFree(Kparams.Kangs);
 	cudaFree(Kparams.DPs_out);
+	cudaFree(Kparams.DPClamped);
 	if (!IsOldGpu)
 		cudaFree(Kparams.L2);
 }
@@ -461,6 +491,7 @@ void RCGpuKang::Execute()
 		cudaMemset(Kparams.DPs_out, 0, 4);
 		cudaMemset(Kparams.DPTable, 0, KangCnt * sizeof(u32));
 		cudaMemset(Kparams.LoopedKangs, 0, 8);
+		cudaMemset(Kparams.DPClamped, 0, sizeof(u32));
 		CallGpuKernelABC(Kparams);
 		int cnt;
 		err = cudaMemcpy(&cnt, Kparams.DPs_out, 4, cudaMemcpyDeviceToHost);
@@ -491,6 +522,10 @@ void RCGpuKang::Execute()
 
 		//dbg
 		cudaMemcpy(dbg, Kparams.dbg_buf, 1024, cudaMemcpyDeviceToHost);
+		u32 clamped = 0;
+		cudaMemcpy(&clamped, Kparams.DPClamped, sizeof(u32), cudaMemcpyDeviceToHost);
+		if (clamped)
+			printf("GPU %d: DP clamped events this iteration: %u (consider DP+2 or higher DP_SLOTS)\n", CudaIndex, clamped);
 
 		u32 lcnt;
 		cudaMemcpy(&lcnt, Kparams.LoopedKangs, 4, cudaMemcpyDeviceToHost);

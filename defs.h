@@ -87,6 +87,8 @@ struct TKparams
 	u64* Jumps3; //x(32b), y(32b), d(32b)
 	u64* JumpsList; //list of all performed jumps, grouped by warp(32) every 8 groups (from PNT_GROUP_CNT). Each jump is 2 bytes: 10bit jump index + flags: INV_FLAG, DP_FLAG, JMP2_FLAG
 	u32* DPTable;
+	u32 DPTableSlots; // dynamic per-kangaroo DP slots instead of fixed DPTABLE_MAX_CNT
+	u32* DPClamped;   // counts DP emissions that exceeded per-kangaroo slots
 	u32* L1S2;
 	u64* LastPnts;
 	u64* LoopTable;

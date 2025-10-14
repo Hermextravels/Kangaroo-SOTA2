@@ -162,8 +162,11 @@ __global__ void KernelA(const TKparams Kparams)
 			{
 				u32 kang_ind = (THREAD_X + BLOCK_X * BLOCK_SIZE) * PNT_GROUP_CNT + group;
 				u32 ind = atomicAdd(Kparams.DPTable + kang_ind, 1);
-				ind = min(ind, DPTABLE_MAX_CNT - 1);
-				int4* dst = (int4*)(Kparams.DPTable + Kparams.KangCnt + (kang_ind * DPTABLE_MAX_CNT + ind) * 4);
+				if (ind >= Kparams.DPTableSlots) {
+					atomicAdd(Kparams.DPClamped, 1);
+					ind = Kparams.DPTableSlots - 1;
+				}
+				int4* dst = (int4*)(Kparams.DPTable + Kparams.KangCnt + (kang_ind * Kparams.DPTableSlots + ind) * 4);
 				dst[0] = ((int4*)x)[0];
 				jmp_ind |= DP_FLAG;
 			}
@@ -400,8 +403,11 @@ __global__ void KernelA(const TKparams Kparams)
 			{
 				u32 kang_ind = (THREAD_X + BLOCK_X * BLOCK_SIZE) * PNT_GROUP_CNT + group;
 				u32 ind = atomicAdd(Kparams.DPTable + kang_ind, 1);
-				ind = min(ind, DPTABLE_MAX_CNT - 1);
-				int4* dst = (int4*)(Kparams.DPTable + Kparams.KangCnt + (kang_ind * DPTABLE_MAX_CNT + ind) * 4);
+				if (ind >= Kparams.DPTableSlots) {
+					atomicAdd(Kparams.DPClamped, 1);
+					ind = Kparams.DPTableSlots - 1;
+				}
+				int4* dst = (int4*)(Kparams.DPTable + Kparams.KangCnt + (kang_ind * Kparams.DPTableSlots + ind) * 4);
 				dst[0] = ((int4*)x)[0];
 				jmp_ind |= DP_FLAG;
 			}
@@ -486,9 +492,11 @@ __device__ __forceinline__ void BuildDP(const TKparams& Kparams, int kang_ind, u
 {
 	int ind = atomicAdd(Kparams.DPTable + kang_ind, 0x10000);
 	ind >>= 16;
-	if (ind >= DPTABLE_MAX_CNT)
+	if (ind >= Kparams.DPTableSlots) {
+		atomicAdd(Kparams.DPClamped, 1);
 		return;
-	int4 rx = *(int4*)(Kparams.DPTable + Kparams.KangCnt + (kang_ind * DPTABLE_MAX_CNT + ind) * 4);
+	}
+	int4 rx = *(int4*)(Kparams.DPTable + Kparams.KangCnt + (kang_ind * Kparams.DPTableSlots + ind) * 4);
 	u32 pos = atomicAdd(Kparams.DPs_out, 1);
 	pos = min(pos, MAX_DP_CNT - 1);
 	u32* DPs = Kparams.DPs_out + 4 + pos * GPU_DP_SIZE / 4;
