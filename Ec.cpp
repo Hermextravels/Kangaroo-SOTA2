@@ -363,7 +363,7 @@ bool EcInt::SetHexStr(const char* str)
 void EcInt::GetHexStr(char* str)
 {
 	for (int i = 0; i < 32; i++)
-		sprintf(str + 2 * i, "%02X", ((u8*)data)[31 - i]);
+		snprintf(str + 2 * i, 3, "%02X", ((u8*)data)[31 - i]);
 	str[64] = 0;
 }
 

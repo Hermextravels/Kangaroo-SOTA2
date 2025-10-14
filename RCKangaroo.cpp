@@ -88,7 +88,7 @@ void InitGpus()
 	cudaRuntimeGetVersion(&rt);
 	cudaDriverGetVersion(&drv);
 	char drvver[100];
-	sprintf(drvver, "%d.%d/%d.%d", drv / 1000, (drv % 100) / 10, rt / 1000, (rt % 100) / 10);
+	snprintf(drvver, sizeof(drvver), "%d.%d/%d.%d", drv / 1000, (drv % 100) / 10, rt / 1000, (rt % 100) / 10);
 
 	printf("CUDA devices: %d, CUDA driver/runtime: %s\r\n", gcnt, drvver);
 	cudaError_t cudaStatus;
