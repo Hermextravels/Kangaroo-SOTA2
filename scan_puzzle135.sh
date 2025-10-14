@@ -56,6 +56,10 @@ MAX_DP_SLOTS=${MAX_DP_SLOTS:-16}
 MIN_DP=${MIN_DP:-12}
 MAX_DP=${MAX_DP_VAL:-22}
 COLLISION_THRESHOLD=${COLLISION_THRESHOLD:-25}  # if Collision Error lines in a window exceed this, raise DP (rarer DPs)
+# Optional: shift the base heuristic DP upward/downward (e.g., DP_BASE_SHIFT=+2 to start 2 bits higher to suppress early collisions)
+DP_BASE_SHIFT=${DP_BASE_SHIFT:-0}
+# Optional: force a minimum DP after heuristic + shift (e.g., MIN_DP_OVERRIDE=18)
+MIN_DP_OVERRIDE=${MIN_DP_OVERRIDE:-0}
 
 mkdir -p "$LOG_DIR"
 
@@ -145,6 +149,16 @@ _base_dp_heuristic() {
       else                     new_dp=22; new_slots=8;   [[ -z "${MAX_SET:-}" ]] && new_max=${MAX:-1.0};
       fi
     fi
+  fi
+  # Apply optional global shift & override to mitigate early Collision Errors
+  if [[ "$DP_BASE_SHIFT" != "0" ]]; then
+    new_dp=$(( new_dp + DP_BASE_SHIFT ))
+  fi
+  if (( MIN_DP_OVERRIDE > 0 && new_dp < MIN_DP_OVERRIDE )); then
+    new_dp=$MIN_DP_OVERRIDE
+  fi
+  if (( new_dp > MAX_DP )); then
+    new_dp=$MAX_DP
   fi
   echo "$new_dp $new_slots $new_max"
 }
