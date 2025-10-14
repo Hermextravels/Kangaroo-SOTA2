@@ -60,6 +60,11 @@ COLLISION_THRESHOLD=${COLLISION_THRESHOLD:-25}  # if Collision Error lines in a 
 DP_BASE_SHIFT=${DP_BASE_SHIFT:-0}
 # Optional: force a minimum DP after heuristic + shift (e.g., MIN_DP_OVERRIDE=18)
 MIN_DP_OVERRIDE=${MIN_DP_OVERRIDE:-0}
+# Automatically raise the allowed MAX_DP for very large windows unless user overrides MAX_DP_VAL explicitly
+AUTO_RAISE_MAX_DP=${AUTO_RAISE_MAX_DP:-1}
+LARGE_WIN_BITS_THRESHOLD=${LARGE_WIN_BITS_THRESHOLD:-56}
+LARGE_WIN_MAX_DP=${LARGE_WIN_MAX_DP:-24}   # new ceiling when WIN_BITS (or ACTIVE_WIN_BITS) >= threshold
+LARGER_WIN_MAX_DP=${LARGER_WIN_MAX_DP:-26} # optional second tier if WIN_BITS >= (threshold+4)
 
 mkdir -p "$LOG_DIR"
 
@@ -205,6 +210,22 @@ while IFS= read -r START_HEX; do
     _win_index=$((_win_index+1))
     # Recompute base heuristic if size changed
     read DP DP_SLOTS MAX < <(_base_dp_heuristic "$ACTIVE_WIN_BITS")
+  fi
+
+  # If using a very large window, optionally expand MAX_DP ceiling for collision suppression
+  if [[ "$AUTO_RAISE_MAX_DP" -eq 1 ]]; then
+    if (( ACTIVE_WIN_BITS >= LARGER_WIN_MAX_DP && ACTIVE_WIN_BITS >= LARGE_WIN_BITS_THRESHOLD + 4 )); then
+      # second tier condition (typo fix: compare bits not dp). Keep structure simple.
+      : # placeholder (we use next clause); retained for clarity
+    fi
+    if (( ACTIVE_WIN_BITS >= LARGE_WIN_BITS_THRESHOLD )); then
+      # Two-tier expansion: threshold+4 gets higher cap
+      if (( ACTIVE_WIN_BITS >= LARGE_WIN_BITS_THRESHOLD + 4 )); then
+        if (( LARGER_WIN_MAX_DP > MAX_DP )); then MAX_DP=$LARGER_WIN_MAX_DP; fi
+      else
+        if (( LARGE_WIN_MAX_DP > MAX_DP )); then MAX_DP=$LARGE_WIN_MAX_DP; fi
+      fi
+    fi
   fi
 
   # per-window log file (include active bits for clarity)
