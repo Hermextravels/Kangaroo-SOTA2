@@ -6,6 +6,8 @@
 
 #include <iostream>
 #include <vector>
+#include <algorithm>
+#include <cmath>
 
 #include "cuda_runtime.h"
 #include "cuda.h"
@@ -835,32 +837,28 @@ bool ParseCommandLine(int argc, char* argv[])
 			return false;
 		}
 	}
-	else
-	if (strcmp(argument, "-dp-auto") == 0)
-	{
-		gDPAuto = true;
-	}
-	else
-	if (strcmp(argument, "-autotune") == 0)
-	{
-		gDPAuto = true; // alias
-	}
-	else
-	if (strcmp(argument, "-mem-cap-mb") == 0)
-	{
-	else
-	if (strcmp(argument, "-split-range") == 0)
-	{
-		int val = atoi(argv[ci]);
-		ci++;
-		if (val < 1 || val > 1000000) { printf("error: invalid value for -split-range option (1..1000000)\r\n"); return false; }
-		gSplitRangeN = (u32)val;
-	}
-		int val = atoi(argv[ci]);
-		ci++;
-		if (val < 512 || val > 15000) { printf("error: invalid value for -mem-cap-mb option (512..15000)\r\n"); return false; }
-		gMemCapMB = (u32)val;
-	}
+		else if (strcmp(argument, "-dp-auto") == 0)
+		{
+			gDPAuto = true;
+		}
+		else if (strcmp(argument, "-autotune") == 0)
+		{
+			gDPAuto = true; // alias
+		}
+		else if (strcmp(argument, "-mem-cap-mb") == 0)
+		{
+			int val = atoi(argv[ci]);
+			ci++;
+			if (val < 512 || val > 15000) { printf("error: invalid value for -mem-cap-mb option (512..15000)\r\n"); return false; }
+			gMemCapMB = (u32)val;
+		}
+		else if (strcmp(argument, "-split-range") == 0)
+		{
+			int val = atoi(argv[ci]);
+			ci++;
+			if (val < 1 || val > 1000000) { printf("error: invalid value for -split-range option (1..1000000)\r\n"); return false; }
+			gSplitRangeN = (u32)val;
+		}
 	if (!gPubKey.x.IsZero())
 		if (!gStartSet || !gRange || !gDP)
 		{
@@ -914,28 +912,26 @@ int main(int argc, char* argv[])
 	if (!ParseCommandLine(argc, argv))
 		return 0;
 
+	// Determine bench mode early for any pre-init helpers
+	IsBench = gPubKey.x.IsZero();
 	InitGpus();
 
 	// If user requested subrange splitting, emit N subranges and exit
-	if (gSplitRangeN > 0 && !IsBench)
+	if (gSplitRangeN > 0)
 	{
 		if (!gStartSet || !gRange)
 		{
 			printf("error: -split-range requires -start and -range\r\n");
 			return 0;
 		}
-		// Compute aligned subranges
-		EcInt cur = gStart; EcInt one; one.SetU32(1);
+		// Compute approximate window size and list; calculation is informational only
 		u32 bits = gRange;
 		u32 win = bits / gSplitRangeN ? (bits / gSplitRangeN) : bits; // naive split; prefer rounding to >=32
 		if (win < 32) win = 32;
 		printf("Split %u into windows of %u bits (approx).\r\n", bits, win);
 		for (u32 i = 0; i < gSplitRangeN; i++)
 		{
-			// start_i = base + i * 2^win
-			EcInt off; off.SetU32(0);
-			EcInt step; step.SetU32(0);
-			// (We don’t have big-int shift helpers here; just print i and win so a wrapper can compute starts.)
+			// (We don’t compute big-int starts here; print indices and win so a wrapper can compute starts.)
 			printf("window %u: i=%u, win_bits=%u\r\n", i + 1, i, win);
 		}
 		return 0;
