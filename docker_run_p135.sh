@@ -18,6 +18,7 @@ SEED=${SEED:-12345}
 TAMES_FILE=${TAMES_FILE:-tames_p135_w${WIN_BITS}.dat}
 LOG_DIR=${LOG_DIR:-logs135}
 FULL_RANGE=${FULL_RANGE:-0}   # if 1, run a single full 134-bit span (no slicing)
+RCK_GPU=${RCK_GPU:-0}        # which GPU(s) to use inside rckangaroo (e.g., "0" or "01")
 
 PUBKEY=02145d2611c823a396ef6712ce0f712f09b9b4f3135e3e0aa3230fb9b6d08d1e16
 START_HEX=4000000000000000000000000000000000
@@ -32,6 +33,9 @@ fi
 mkdir -p "$SCRIPT_DIR/$LOG_DIR"
 
 # 3) Run inside container, mounting the repo so results persist
+echo "[docker_run_p135] Using BASE_IMAGE=$BASE_IMAGE IMAGE_TAG=$IMAGE_TAG"
+echo "[docker_run_p135] Mode: ${FULL_RANGE==1?full-range:windowed} GPU(runtime)=$GPU_MASK GPU(rckangaroo)=$RCK_GPU"
+
 if [ "$FULL_RANGE" = "1" ]; then
   # Direct full-span run (no slicing): range = 134 bits
   exec docker run --rm \
@@ -42,7 +46,7 @@ if [ "$FULL_RANGE" = "1" ]; then
     bash -lc "\
       set -e; \
       ./rckangaroo \
-        -gpu 0 \
+        -gpu $RCK_GPU \
         -pubkey $PUBKEY \
         -start $START_HEX \
         -range 134 \
@@ -58,6 +62,7 @@ else
     --gpus $GPU_MASK \
     -v "$WS_DIR":/ws \
     -w /ws/RCKangaroo \
+    -e GPU_MASK="$RCK_GPU" \
     -e PUBKEY_COMPRESSED="$PUBKEY" \
     -e START_HEX="$START_HEX" \
     -e END_HEX="$END_HEX" \
