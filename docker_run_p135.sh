@@ -19,13 +19,14 @@ TAMES_FILE=${TAMES_FILE:-tames_p135_w${WIN_BITS}.dat}
 LOG_DIR=${LOG_DIR:-logs135}
 FULL_RANGE=${FULL_RANGE:-0}   # if 1, run a single full 134-bit span (no slicing)
 RCK_GPU=${RCK_GPU:-0}        # which GPU(s) to use inside rckangaroo (e.g., "0" or "01")
+FORCE_REBUILD=${FORCE_REBUILD:-0}
 
 PUBKEY=02145d2611c823a396ef6712ce0f712f09b9b4f3135e3e0aa3230fb9b6d08d1e16
 START_HEX=4000000000000000000000000000000000
 END_HEX=7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 
 # 1) Build image
-if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+if [ "$FORCE_REBUILD" = "1" ] || ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
   docker build --build-arg BASE_IMAGE="$BASE_IMAGE" -t "$IMAGE_TAG" "$SCRIPT_DIR"
 fi
 
@@ -34,7 +35,8 @@ mkdir -p "$SCRIPT_DIR/$LOG_DIR"
 
 # 3) Run inside container, mounting the repo so results persist
 echo "[docker_run_p135] Using BASE_IMAGE=$BASE_IMAGE IMAGE_TAG=$IMAGE_TAG"
-echo "[docker_run_p135] Mode: ${FULL_RANGE==1?full-range:windowed} GPU(runtime)=$GPU_MASK GPU(rckangaroo)=$RCK_GPU"
+MODE_STR="windowed"; [ "$FULL_RANGE" = "1" ] && MODE_STR="full-range"
+echo "[docker_run_p135] Mode: $MODE_STR GPU(runtime)=$GPU_MASK GPU(rckangaroo)=$RCK_GPU"
 
 if [ "$FULL_RANGE" = "1" ]; then
   # Direct full-span run (no slicing): range = 134 bits

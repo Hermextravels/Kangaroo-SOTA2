@@ -9,7 +9,17 @@ cd "$(dirname "$0")"
 # 1) Build
 if [ ! -x ./rckangaroo ]; then
   echo "Building rckangaroo..."
-  make -j || { echo "Build failed. Ensure CUDA is installed and CUDA_PATH points to /usr/local/cuda"; exit 2; }
+  # Auto-detect CUDA_PATH if not provided
+  if [ -z "${CUDA_PATH:-}" ]; then
+    if command -v nvcc >/dev/null 2>&1; then
+      export CUDA_PATH="$(dirname "$(dirname "$(command -v nvcc)")")"
+      echo "Detected CUDA_PATH=$CUDA_PATH"
+    fi
+  fi
+  make -j"${JOBS:-$(nproc 2>/dev/null || echo 4)}" || { \
+    echo "Build failed. Ensure CUDA Toolkit is installed and CUDA_PATH points to the CUDA root (parent of bin/include)."; \
+    echo "Hint: export CUDA_PATH=\"$(dirname \"$(dirname \"$(command -v nvcc 2>/dev/null || echo /usr/local/cuda/bin/nvcc)\")\")\""; \
+    exit 2; }
 fi
 
 # 2) Defaults for Puzzle #135
