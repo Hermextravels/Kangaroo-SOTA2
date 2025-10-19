@@ -28,6 +28,21 @@ export VERBOSE=${VERBOSE:-1}
 export ORDER=${ORDER:-permute}
 export SEED=${SEED:-12345}
 export SKIP_VISITED=${SKIP_VISITED:-1}
+export FULL_RANGE=${FULL_RANGE:-0}   # if 1, run full 134-bit span (no slicing)
 
 # 3) Run
-./scan_puzzle135.sh
+if [ "$FULL_RANGE" = "1" ]; then
+  echo "Running full 134-bit span (no slicing)"
+  ./rckangaroo \
+    -gpu "$GPU_MASK" \
+    -pubkey "$PUBKEY_COMPRESSED" \
+    -start "$START_HEX" \
+    -range 134 \
+    -dp "$DP" \
+    -dp-slots "$DP_SLOTS" \
+    -resume \
+    -checkpoint-secs "$CHECKPOINT_SECS" \
+    ${TAMES_FILE:+-tames "$TAMES_FILE"}
+else
+  ./scan_puzzle135.sh
+fi
