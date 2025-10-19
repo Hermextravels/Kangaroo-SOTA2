@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 IMAGE_TAG=${IMAGE_TAG:-rckangaroo:cuda12.4}
+BASE_IMAGE=${BASE_IMAGE:-nvidia/cuda:12.4.0-devel-ubuntu22.04}
 GPU_MASK=${GPU_MASK:-all}   # "all" or a specific device index list
 WIN_BITS=${WIN_BITS:-40}
 DP=${DP:-16}
@@ -24,7 +25,7 @@ END_HEX=7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 
 # 1) Build image
 if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
-  docker build -t "$IMAGE_TAG" "$SCRIPT_DIR"
+  docker build --build-arg BASE_IMAGE="$BASE_IMAGE" -t "$IMAGE_TAG" "$SCRIPT_DIR"
 fi
 
 # 2) Ensure log dir exists on host
