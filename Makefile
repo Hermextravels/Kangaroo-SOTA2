@@ -1,5 +1,5 @@
 ## Host C++ compiler (respect env override)
-CC ?= g++
+CXX ?= g++
 
 ## Prefer explicit CUDA_PATH, then CUDA_HOME, else fallback to /usr/local/cuda
 ifdef CUDA_PATH
@@ -23,13 +23,13 @@ ALLOW_UNSUPPORTED ?= 0
 ALLOW_UNSUPPORTED_FLAG := $(if $(filter 1,$(ALLOW_UNSUPPORTED)),-allow-unsupported-compiler,)
 
 ## Compiler flags
-CCFLAGS := -O3 -I$(CUDA_ROOT)/include
+CXXFLAGS := -O3 -I$(CUDA_ROOT)/include
 NVCCFLAGS := -O3 -ccbin=$(NVCC_CCBIN) $(ALLOW_UNSUPPORTED_FLAG) \
 	-gencode=arch=compute_89,code=compute_89 \
 	-gencode=arch=compute_86,code=compute_86 \
 	-gencode=arch=compute_75,code=compute_75 \
 	-gencode=arch=compute_61,code=compute_61
-LDFLAGS := -L$(CUDA_ROOT)/lib64 -lcudart -pthread
+LDFLAGS := -L$(CUDA_ROOT)/lib64 -lcudart -pthread -lm
 
 .PHONY: check_cuda
 check_cuda:
@@ -54,10 +54,10 @@ TARGET := rckangaroo
 all: check_cuda $(TARGET)
 
 $(TARGET): $(CPP_OBJECTS) $(CU_OBJECTS)
-	$(CC) $(CCFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 %.o: %.cpp
-	$(CC) $(CCFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 %.o: %.cu
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
